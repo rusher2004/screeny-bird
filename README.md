@@ -36,7 +36,7 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `cmd`, `commands` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `cmd`, `commands`, `catalog` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 
