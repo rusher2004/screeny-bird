@@ -11,8 +11,9 @@ These are review-blocking. They come from the owner's Go standards and, where no
 ### Configuration (overrides the standards brief)
 
 - **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
-- **The service does not care where config comes from.** Commands receive a typed `config.Config` through a small interface declared in `commands`. Today it is loaded from a TOML file whose path is the `--config` flag; the file is decoded strictly, so unknown keys, wrong types and missing or empty values are errors. Changing the source touches `config/` and the composition root only.
-- **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. `cmd/` may make only named `os.Getenv` or `os.LookupEnv` reads, never pass the whole environment down, and currently makes none. Tests inject values and do not use the real environment.
+- **`cmd/main.go` owns loading config.** It declares the `configLoader` interface it needs and wires an implementation from the `config` package. `config.TOMLFile` is the only one today; another source, such as AWS Secrets Manager, is another type in `config` that implements the same interface. A leading `--config <path>` flag, parsed by `main`, names the TOML file. The file is decoded strictly: unknown keys, wrong types and missing or empty settings are errors.
+- **`commands` never sees config.** It declares `commands.Settings`, the values it needs, and each command checks the ones it uses when it runs, failing with `ErrMissingSetting` naming the setting. `main` maps `config.Config` to `commands.Settings`. Commands that need no settings, like `version`, work with no config source.
+- **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. Tests inject values and do not use the real environment.
 - Containers receive the config file the same way in development and production, as a mounted file.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
 
@@ -61,10 +62,10 @@ When a change affects commands, flags, exit codes or config keys, update `README
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. The one place errors are printed and exit codes chosen. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. The root `--config` flag names the settings file; commands load it through a small interface and fail with `ErrMissingSetting` when it is absent. |
+| `cmd/` | `main`. Parses its leading `--config` flag, loads settings through its `configLoader` interface, maps them to `commands.Settings`, and is the one place errors are printed and exit codes chosen. |
+| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares `Settings`; each command checks the settings it needs and fails with `ErrMissingSetting`. |
 | `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
-| `config/` | `Load` reads the TOML settings file strictly into `Config`: every setting required, unknown keys rejected, no defaults. |
+| `config/` | `Config` and its loaders. `TOMLFile` reads the settings strictly from a TOML file: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |

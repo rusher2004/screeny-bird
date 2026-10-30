@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/rusher2004/screeny-bird/catalog"
-	"github.com/rusher2004/screeny-bird/config"
 )
 
 // ExitUsage is the exit code for a malformed command line.
@@ -33,22 +31,15 @@ func (e *ExitError) Error() string {
 	return e.Msg
 }
 
-// ErrMissingSetting reports a required command-line setting that was not
-// supplied. An empty value counts as not supplied.
+// ErrMissingSetting reports a setting a command needs that was not supplied.
+// An empty value counts as not supplied.
 var ErrMissingSetting = errors.New("missing required setting")
 
-const configFlag = "config"
-
-// configLoader is what commands need to obtain the service's settings.
-type configLoader interface {
-	LoadConfig(path string) (config.Config, error)
-}
-
-// fileConfigs loads settings from TOML files with the config package.
-type fileConfigs struct{}
-
-func (fileConfigs) LoadConfig(path string) (config.Config, error) {
-	return config.Load(os.DirFS(filepath.Dir(path)), filepath.Base(path))
+// Settings are the operator-supplied values commands use. A command checks the
+// ones it needs when it runs, so commands that need none work without any.
+type Settings struct {
+	// CatalogDir is the directory holding the catalog's index.json and species/.
+	CatalogDir string
 }
 
 // catalogLoader is what the validate command needs from the catalog: load the
@@ -69,30 +60,15 @@ func (dirCatalogs) LoadCatalog(dir string) (int, error) {
 	return len(loaded.Species()), nil
 }
 
-// loadConfig reads the file named by the root --config flag. The path has no
-// default and no other source.
-func loadConfig(cmd *cli.Command, loader configLoader) (config.Config, error) {
-	path := cmd.Root().String(configFlag)
-	if strings.TrimSpace(path) == "" {
-		return config.Config{}, fmt.Errorf("%w: pass --%s with the path to the config file", ErrMissingSetting, configFlag)
-	}
-
-	cfg, err := loader.LoadConfig(path)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("loading config: %w", err)
-	}
-
-	return cfg, nil
-}
-
 // Options injects everything the command tree depends on. Version, Stdout and
-// Stderr are required: there are no defaults. Configs and Catalogs replace the
-// filesystem implementations and exist so tests can substitute them.
+// Stderr are required: there are no defaults. Settings carries what the caller
+// supplied; each command checks the settings it needs. Catalogs replaces the
+// filesystem catalog loader and exists so tests can substitute it.
 type Options struct {
 	Version  string
 	Stdout   io.Writer
 	Stderr   io.Writer
-	Configs  configLoader
+	Settings Settings
 	Catalogs catalogLoader
 }
 
@@ -113,22 +89,11 @@ func New(opts Options) (*cli.Command, error) {
 		catalogs = dirCatalogs{}
 	}
 
-	configs := opts.Configs
-	if configs == nil {
-		configs = fileConfigs{}
-	}
-
 	return &cli.Command{
 		Name:      "screeny",
 		Usage:     "Validate, sync and serve the bird plate catalog",
 		Writer:    opts.Stdout,
 		ErrWriter: opts.Stderr,
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  configFlag,
-				Usage: "path to the TOML config file (required by commands that use settings)",
-			},
-		},
 		// The caller owns printing and exit codes, so the library must neither
 		// print a returned error nor call os.Exit.
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},
@@ -157,14 +122,14 @@ func New(opts Options) (*cli.Command, error) {
 						Name:  "validate",
 						Usage: "Check the catalog against its rules",
 						Action: func(_ context.Context, cmd *cli.Command) error {
-							cfg, err := loadConfig(cmd, configs)
-							if err != nil {
-								return err
+							dir := opts.Settings.CatalogDir
+							if strings.TrimSpace(dir) == "" {
+								return fmt.Errorf("catalog_dir: %w", ErrMissingSetting)
 							}
 
-							species, err := catalogs.LoadCatalog(cfg.CatalogDir)
+							species, err := catalogs.LoadCatalog(dir)
 							if err != nil {
-								return fmt.Errorf("validating catalog %q: %w", cfg.CatalogDir, err)
+								return fmt.Errorf("validating catalog %q: %w", dir, err)
 							}
 
 							if _, err := fmt.Fprintf(cmd.Root().Writer, "validated %d species\n", species); err != nil {
