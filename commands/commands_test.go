@@ -33,15 +33,19 @@ func run(t *testing.T, opts commands.Options, args ...string) (output string, er
 }
 
 type fakeCatalogs struct {
-	dirs    []string
-	species int
-	err     error
+	dirs []string
+	err  error
 }
 
-func (f *fakeCatalogs) LoadCatalog(dir string) (int, error) {
+// LoadDir returns an empty catalog: the zero value is valid and holds no species.
+func (f *fakeCatalogs) LoadDir(dir string) (*catalog.Catalog, error) {
 	f.dirs = append(f.dirs, dir)
 
-	return f.species, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return &catalog.Catalog{}, nil
 }
 
 type fakeConfigs struct {
@@ -146,14 +150,14 @@ func TestCatalogValidateReportsSpeciesCount(t *testing.T) {
 	t.Parallel()
 
 	configs := &fakeConfigs{cfg: config.Config{CatalogDir: "/data/catalog"}}
-	catalogs := &fakeCatalogs{species: 184}
+	catalogs := &fakeCatalogs{}
 
 	output, err := run(t, commands.Options{Configs: configs, Catalogs: catalogs}, "catalog", "validate", "--config", "/etc/screeny.toml")
 	if err != nil {
 		t.Fatalf("Run(catalog validate) error = %v", err)
 	}
 
-	if got, want := output, "validated 184 species\n"; got != want {
+	if got, want := output, "validated 0 species\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 

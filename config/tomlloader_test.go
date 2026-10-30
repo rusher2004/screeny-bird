@@ -4,9 +4,9 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/rusher2004/screeny-bird/config"
 )
@@ -14,9 +14,12 @@ import (
 func load(t *testing.T, content string) (config.Config, error) {
 	t.Helper()
 
-	fsys := fstest.MapFS{"screeny.toml": &fstest.MapFile{Data: []byte(content)}}
+	path := filepath.Join(t.TempDir(), "screeny.toml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
-	return config.TOMLFile{FS: fsys, Name: "screeny.toml"}.Load()
+	return config.TOMLLoader{}.LoadConfig(path)
 }
 
 func TestLoadReadsEverySetting(t *testing.T) {
@@ -96,7 +99,7 @@ func TestLoadNamesTheUnknownKey(t *testing.T) {
 func TestLoadReportsAMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := config.TOMLFile{FS: fstest.MapFS{}, Name: "absent.toml"}.Load()
+	_, err := config.TOMLLoader{}.LoadConfig(filepath.Join(t.TempDir(), "absent.toml"))
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Load() error = %v, want fs.ErrNotExist", err)
 	}
@@ -110,7 +113,7 @@ func TestLoadReportsAMissingFile(t *testing.T) {
 func TestExampleConfigLoads(t *testing.T) {
 	t.Parallel()
 
-	if _, err := (config.TOMLFile{FS: os.DirFS(".."), Name: "config.example.toml"}).Load(); err != nil {
+	if _, err := (config.TOMLLoader{}).LoadConfig(filepath.Join("..", "config.example.toml")); err != nil {
 		t.Fatalf("Load(config.example.toml) error = %v", err)
 	}
 }

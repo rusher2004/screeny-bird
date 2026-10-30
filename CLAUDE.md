@@ -11,7 +11,7 @@ These are review-blocking. They come from the owner's Go standards and, where no
 ### Configuration (overrides the standards brief)
 
 - **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
-- **`commands` gets the config it needs.** A command that needs settings declares the flag itself (today `--config <path>` on `catalog validate`) and reads it with `cmd.String`, as the urfave/cli flag examples do. It loads settings through a small interface declared in `commands`, with a test seam on `Options`. `config.TOMLFile` implements the loading and decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` plus an adapter in the `commands` composition root.
+- **`commands` gets the config it needs.** A command that needs settings declares the flag itself (today `--config <path>` on `catalog validate`) and reads it with `cmd.String`, as the urfave/cli flag examples do. `commands` declares small interfaces for what it needs (`LoadConfig(path)`, `LoadDir(dir)`) and uses the library types that implement them directly, `config.TOMLLoader` and `catalog.DirLoader`, with a nil-means-real test seam on `Options`. The libraries own the filesystem details; `commands` has no adapters. `config.TOMLLoader` decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` with a `LoadConfig(path)` method.
 - **`cmd/main.go` needs no config.** It calls `commands`, prints the returned error once and maps the exit code.
 - **Commands that need no settings, like `version`, work with no config source.**
 - **The version is discovered by `commands`.** The build injects it with `-ldflags "-X github.com/rusher2004/screeny-bird/commands.version=<VERSION>"` (this replaces the brief's `main.version`). A binary built without it fails the `version` command with `ErrNoVersion`; there is no fallback.
@@ -68,8 +68,8 @@ When a change affects commands, flags, exit codes or config keys, update `README
 | `cmd/` | `main`. Runs `commands`, prints the returned error once and maps the exit code. |
 | `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares the flags and settings each command needs, loads them through small interfaces, and discovers the build version. |
 | `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
-| `config/` | `Config` and its loaders. `TOMLFile` reads the settings strictly from a TOML file: every setting required, unknown keys rejected, no defaults. |
-| `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
+| `config/` | `Config` and its loaders. `TOMLLoader` reads the settings strictly from a TOML file by path: every setting required, unknown keys rejected, no defaults. |
+| `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. `DirLoader.LoadDir` loads one from a directory on disk. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |
 | `derive/` | (planned, M3) Deterministic screensaver-sized image derivatives. |

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -28,6 +26,13 @@ const configFlag = "config"
 // ErrMissingOption reports that a required Options field was not provided.
 var ErrMissingOption = errors.New("missing required option")
 
+// ErrMissingSetting reports a setting a command needs that was not supplied.
+// An empty value counts as not supplied.
+var ErrMissingSetting = errors.New("missing required setting")
+
+// ErrNoVersion reports a binary built without a version.
+var ErrNoVersion = errors.New("version was not set at build time")
+
 // ExitError carries a process exit code that differs from the default of 1.
 // It has no Unwrap: its message stands on its own.
 type ExitError struct {
@@ -39,42 +44,16 @@ func (e *ExitError) Error() string {
 	return e.Msg
 }
 
-// ErrMissingSetting reports a setting a command needs that was not supplied.
-// An empty value counts as not supplied.
-var ErrMissingSetting = errors.New("missing required setting")
-
-// ErrNoVersion reports a binary built without a version.
-var ErrNoVersion = errors.New("version was not set at build time")
-
 // configLoader is what commands need to obtain the settings a command uses:
 // load the settings kept at path.
 type configLoader interface {
 	LoadConfig(path string) (config.Config, error)
 }
 
-// fileConfigs loads settings from TOML files with the config package.
-type fileConfigs struct{}
-
-func (fileConfigs) LoadConfig(path string) (config.Config, error) {
-	return config.TOMLFile{FS: os.DirFS(filepath.Dir(path)), Name: filepath.Base(path)}.Load()
-}
-
 // catalogLoader is what the validate command needs from the catalog: load the
-// catalog in a directory and say how many species it holds.
+// catalog in a directory.
 type catalogLoader interface {
-	LoadCatalog(dir string) (species int, err error)
-}
-
-// dirCatalogs loads catalogs from directories with the catalog package.
-type dirCatalogs struct{}
-
-func (dirCatalogs) LoadCatalog(dir string) (int, error) {
-	loaded, err := catalog.Load(os.DirFS(dir))
-	if err != nil {
-		return 0, err
-	}
-
-	return len(loaded.Species()), nil
+	LoadDir(dir string) (*catalog.Catalog, error)
 }
 
 // Options injects what the command tree depends on. Output is required: there
@@ -97,12 +76,12 @@ func New(opts Options) (*cli.Command, error) {
 
 	catalogs := opts.Catalogs
 	if catalogs == nil {
-		catalogs = dirCatalogs{}
+		catalogs = catalog.DirLoader{}
 	}
 
 	configs := opts.Configs
 	if configs == nil {
-		configs = fileConfigs{}
+		configs = config.TOMLLoader{}
 	}
 
 	shownVersion := opts.Version
@@ -160,12 +139,12 @@ func New(opts Options) (*cli.Command, error) {
 								return fmt.Errorf("loading config: %w", err)
 							}
 
-							species, err := catalogs.LoadCatalog(cfg.CatalogDir)
+							loaded, err := catalogs.LoadDir(cfg.CatalogDir)
 							if err != nil {
 								return fmt.Errorf("validating catalog %q: %w", cfg.CatalogDir, err)
 							}
 
-							if _, err := fmt.Fprintf(cmd.Root().Writer, "validated %d species\n", species); err != nil {
+							if _, err := fmt.Fprintf(cmd.Root().Writer, "validated %d species\n", len(loaded.Species())); err != nil {
 								return fmt.Errorf("writing validation result: %w", err)
 							}
 
