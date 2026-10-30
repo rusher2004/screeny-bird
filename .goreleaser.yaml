@@ -16,7 +16,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -X main.version={{ .Version }}
+      - -X github.com/rusher2004/screeny-bird/commands.version={{ .Version }}
 
 archives:
   - formats:

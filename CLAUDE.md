@@ -11,8 +11,10 @@ These are review-blocking. They come from the owner's Go standards and, where no
 ### Configuration (overrides the standards brief)
 
 - **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
-- **`cmd/main.go` owns loading config.** It declares the `configLoader` interface it needs and wires an implementation from the `config` package. `config.TOMLFile` is the only one today; another source, such as AWS Secrets Manager, is another type in `config` that implements the same interface. A leading `--config <path>` flag, parsed by `main`, names the TOML file. The file is decoded strictly: unknown keys, wrong types and missing or empty settings are errors.
-- **`commands` never sees config.** It declares `commands.Settings`, the values it needs, and each command checks the ones it uses when it runs, failing with `ErrMissingSetting` naming the setting. `main` maps `config.Config` to `commands.Settings`. Commands that need no settings, like `version`, work with no config source.
+- **`commands` gets the config it needs.** A command that needs settings declares the flag itself (today `--config <path>` on `catalog validate`) and reads it with `cmd.String`, as the urfave/cli flag examples do. It loads settings through a small interface declared in `commands`, with a test seam on `Options`. `config.TOMLFile` implements the loading and decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` plus an adapter in the `commands` composition root.
+- **`cmd/main.go` needs no config.** It calls `commands`, prints the returned error once and maps the exit code.
+- **Commands that need no settings, like `version`, work with no config source.**
+- **The version is discovered by `commands`.** The build injects it with `-ldflags "-X github.com/rusher2004/screeny-bird/commands.version=<VERSION>"` (this replaces the brief's `main.version`). A binary built without it fails the `version` command with `ErrNoVersion`; there is no fallback.
 - **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. Tests inject values and do not use the real environment.
 - Containers receive the config file the same way in development and production, as a mounted file.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
@@ -63,8 +65,8 @@ When a change affects commands, flags, exit codes or config keys, update `README
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. Parses its leading `--config` flag, loads settings through its `configLoader` interface, maps them to `commands.Settings`, and is the one place errors are printed and exit codes chosen. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares `Settings`; each command checks the settings it needs and fails with `ErrMissingSetting`. |
+| `cmd/` | `main`. Runs `commands`, prints the returned error once and maps the exit code. |
+| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares the flags and settings each command needs, loads them through small interfaces, and discovers the build version. |
 | `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
 | `config/` | `Config` and its loaders. `TOMLFile` reads the settings strictly from a TOML file: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |

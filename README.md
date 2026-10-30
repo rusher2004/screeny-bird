@@ -25,7 +25,7 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 
 ## Configuration
 
-Settings come from a TOML file named with a leading `--config <path>` flag; [config.example.toml](config.example.toml) shows every one. All are required.
+Settings come from a TOML file named with the `--config <path>` flag; [config.example.toml](config.example.toml) shows every one. All are required.
 
 | Setting | Used by | Meaning |
 | --- | --- | --- |
