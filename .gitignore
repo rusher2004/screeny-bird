@@ -1,0 +1,17 @@
+# Local configuration and secrets: containers receive config explicitly.
+.env
+.env.*
+!.env.example
+
+# Build output
+/dist/
+/bin/
+*.test
+
+# Per-user Claude Code settings; shared settings live in .claude/settings.json.
+.claude/settings.local.json
+
+# Local catalog store
+/data/
+
+.DS_Store
