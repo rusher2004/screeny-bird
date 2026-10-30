@@ -48,7 +48,9 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 | No flag defaults in `commands` | `tools/ifaceaudit` `TestRepository` |
 | No type-only files or producer interfaces | `tools/ifaceaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
-| Catalog and asset rules (immutability, review gate, checksums, paths, projection, CORS, schema version) | Pending: M1 `catalog`, M2 `server` |
+| Review gate, location-free review, private fields and local paths, image size/format/metadata, checksums, unexpected files, symlinks, schema version, index matches manifests | `catalog` tests (`review_test`, `privacy_test`, `image_test`, `manifest_test`, `index_test`, `catalog_test`) |
+| Approved taxa are immutable; staged changes hold only the index and new species | Pending: M3 `upstream` sync |
+| Served assets are in the active catalog and verified first; CORS off by default; GET and HEAD are side-effect free; projection exposes no private data | Pending: M2 `server` |
 
 ### Docs
 
@@ -61,7 +63,7 @@ When a change affects commands, flags, exit codes or config keys, update `README
 | `cmd/` | `main`. The one place errors are printed and exit codes chosen. Reads no config yet; when it does, it is the only reader of ambient state. |
 | `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. |
 | `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
-| `catalog/` | (planned, M1) Concrete types to read and validate species, manifests and the index. |
+| `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |
 | `derive/` | (planned, M3) Deterministic screensaver-sized image derivatives. |
