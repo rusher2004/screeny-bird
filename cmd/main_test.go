@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rusher2004/screeny-bird/commands"
 )
 
 func TestRun(t *testing.T) {
@@ -14,7 +16,7 @@ func TestRun(t *testing.T) {
 	tests := []struct {
 		name       string
 		version    string
-		env        map[string]string
+		cfg        commands.Config
 		args       []string
 		wantCode   int
 		wantStdout string
@@ -56,7 +58,7 @@ func TestRun(t *testing.T) {
 
 			var stdout, stderr bytes.Buffer
 
-			code := run(context.Background(), tt.version, tt.env, tt.args, &stdout, &stderr)
+			code := run(context.Background(), tt.version, tt.cfg, tt.args, &stdout, &stderr)
 
 			if code != tt.wantCode {
 				t.Errorf("run() code = %d, want %d", code, tt.wantCode)
@@ -73,24 +75,29 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestEnvironMap(t *testing.T) {
+func TestConfigFromEnvReadsOnlyDeclaredSettings(t *testing.T) {
 	t.Parallel()
 
-	got := environMap([]string{"A=1", "B=", "C=x=y", "NOEQUALS"})
+	var asked []string
 
-	want := map[string]string{"A": "1", "B": "", "C": "x=y"}
-	if len(got) != len(want) {
-		t.Fatalf("environMap() = %v, want %v", got, want)
+	getenv := func(key string) string {
+		asked = append(asked, key)
+
+		return map[string]string{"SCREENY_CATALOG": "/data/catalog", "HOME": "/home/someone"}[key]
 	}
 
-	for key, value := range want {
-		if got[key] != value {
-			t.Errorf("environMap()[%q] = %q, want %q", key, got[key], value)
-		}
+	got := configFromEnv(getenv)
+
+	if got.Catalog != "/data/catalog" {
+		t.Errorf("configFromEnv().Catalog = %q, want /data/catalog", got.Catalog)
+	}
+
+	if len(asked) != 1 || asked[0] != "SCREENY_CATALOG" {
+		t.Errorf("configFromEnv() read %v, want only [SCREENY_CATALOG]", asked)
 	}
 }
 
-func TestRunPassesEnvironmentToCommands(t *testing.T) {
+func TestRunPassesConfigToCommands(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -105,9 +112,9 @@ func TestRunPassesEnvironmentToCommands(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	env := map[string]string{"SCREENY_CATALOG": dir}
+	cfg := commands.Config{Catalog: dir}
 
-	code := run(context.Background(), "1.2.3", env, []string{"screeny", "catalog", "validate"}, &stdout, &stderr)
+	code := run(context.Background(), "1.2.3", cfg, []string{"screeny", "catalog", "validate"}, &stdout, &stderr)
 	if code != 0 || stdout.String() != "validated 0 species\n" || stderr.Len() != 0 {
 		t.Fatalf("run() = code %d, stdout %q, stderr %q; want 0, %q and no stderr", code, stdout.String(), stderr.String(), "validated 0 species\n")
 	}

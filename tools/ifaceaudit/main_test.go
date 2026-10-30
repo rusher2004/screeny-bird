@@ -118,6 +118,22 @@ func TestAuditReportsViolations(t *testing.T) {
 			path: "catalog/catalog_test.go",
 		},
 		{
+			name: "whole environment read in cmd",
+			files: map[string]string{
+				"cmd/main.go": "package main\n\nimport \"os\"\n\nfunc main() { _ = os.Environ() }\n",
+			},
+			kind: kindAmbientAccess,
+			path: "cmd/main.go",
+		},
+		{
+			name: "implicit directory in cmd",
+			files: map[string]string{
+				"cmd/main.go": "package main\n\nimport \"os\"\n\nfunc main() { _, _ = os.UserConfigDir() }\n",
+			},
+			kind: kindAmbientAccess,
+			path: "cmd/main.go",
+		},
+		{
 			name: "flag default value",
 			files: map[string]string{
 				"commands/commands.go": "package commands\n\nimport \"github.com/urfave/cli/v3\"\n\n" +

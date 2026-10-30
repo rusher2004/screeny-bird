@@ -35,11 +35,19 @@ func (e *ExitError) Error() string {
 // injected environment supplied. An empty value counts as not supplied.
 var ErrMissingSetting = errors.New("missing required setting")
 
-// Setting names. Each setting is a flag with a matching environment key.
-const (
-	catalogFlag = "catalog"
-	catalogEnv  = "SCREENY_CATALOG"
-)
+// EnvCatalog is the environment key the operator sets to supply Config.Catalog.
+// main is the only code that reads the environment.
+const EnvCatalog = "SCREENY_CATALOG"
+
+const catalogFlag = "catalog"
+
+// Config holds every operator-supplied setting. Each field is required by the
+// commands that use it, there are no defaults, and an empty value counts as
+// not supplied. A flag on the command line overrides its field.
+type Config struct {
+	// Catalog is the directory holding the catalog's index.json and species/.
+	Catalog string
+}
 
 // catalogLoader is what the validate command needs from the catalog: load the
 // catalog in a directory and say how many species it holds.
@@ -59,23 +67,18 @@ func (dirCatalogs) LoadCatalog(dir string) (int, error) {
 	return len(loaded.Species()), nil
 }
 
-// envSource reads one key from the injected environment map. The command tree
-// never reads the process environment itself: main passes the map in.
-type envSource struct {
-	key string
-	env map[string]string
+// configSource supplies a flag's value from Config. The environment key is
+// reported so help text can tell the operator how to set it.
+type configSource struct {
+	key   string
+	value string
 }
 
-func (s envSource) Lookup() (string, bool) {
-	value := s.env[s.key]
-
-	return value, value != ""
-}
-
-func (s envSource) String() string   { return fmt.Sprintf("environment variable %q", s.key) }
-func (s envSource) GoString() string { return fmt.Sprintf("envSource{key: %q}", s.key) }
-func (s envSource) IsFromEnv() bool  { return true }
-func (s envSource) Key() string      { return s.key }
+func (s configSource) Lookup() (string, bool) { return s.value, s.value != "" }
+func (s configSource) String() string         { return fmt.Sprintf("environment variable %q", s.key) }
+func (s configSource) GoString() string       { return fmt.Sprintf("configSource{key: %q}", s.key) }
+func (s configSource) IsFromEnv() bool        { return true }
+func (s configSource) Key() string            { return s.key }
 
 // requiredSetting returns a setting's value, or ErrMissingSetting naming both
 // ways to supply it.
@@ -89,14 +92,14 @@ func requiredSetting(cmd *cli.Command, flag, envKey string) (string, error) {
 }
 
 // Options injects everything the command tree depends on. Version, Stdout and
-// Stderr are required: there are no defaults. Env holds the environment values
-// main chose to pass down; nil means none. Catalogs replaces the filesystem
-// catalog loader and exists so tests can substitute it.
+// Stderr are required: there are no defaults. Config carries the operator's
+// settings. Catalogs replaces the filesystem catalog loader and exists so tests
+// can substitute it.
 type Options struct {
 	Version  string
 	Stdout   io.Writer
 	Stderr   io.Writer
-	Env      map[string]string
+	Config   Config
 	Catalogs catalogLoader
 }
 
@@ -153,11 +156,11 @@ func New(opts Options) (*cli.Command, error) {
 							&cli.StringFlag{
 								Name:    catalogFlag,
 								Usage:   "directory holding index.json and species/ (required)",
-								Sources: cli.NewValueSourceChain(envSource{key: catalogEnv, env: opts.Env}),
+								Sources: cli.NewValueSourceChain(configSource{key: EnvCatalog, value: opts.Config.Catalog}),
 							},
 						},
 						Action: func(_ context.Context, cmd *cli.Command) error {
-							dir, err := requiredSetting(cmd, catalogFlag, catalogEnv)
+							dir, err := requiredSetting(cmd, catalogFlag, EnvCatalog)
 							if err != nil {
 								return err
 							}

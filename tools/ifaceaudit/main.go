@@ -33,12 +33,17 @@ const (
 // small consumer-defined interfaces instead of their concrete types.
 var producerPackages = []string{"catalog", "server", "upstream", "derive", "fsutil"}
 
-// ambientOSCalls read or change process-wide ambient state. Only cmd/ may
-// call them: every other package receives its configuration explicitly.
+// ambientOSCalls read or change process-wide ambient state. Outside cmd/ every
+// one is banned: packages receive their configuration explicitly.
 var ambientOSCalls = []string{
 	"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Setenv", "Unsetenv", "Clearenv",
 	"UserHomeDir", "UserConfigDir", "UserCacheDir",
 }
+
+// namedEnvReads are the only ambient calls cmd/ may make. Each reads one key
+// that the program declares; handing down the whole environment, expanding
+// variables, or deriving implicit directories is banned there too.
+var namedEnvReads = []string{"Getenv", "LookupEnv"}
 
 const cliImportPath = "github.com/urfave/cli/v3"
 
@@ -231,9 +236,15 @@ func auditFile(abs, rel, module string) ([]finding, error) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.SelectorExpr:
-			if !isCmd && refersTo(node.X, imps, "os") && slices.Contains(ambientOSCalls, node.Sel.Name) {
-				add(node.Pos(), kindAmbientAccess,
-					fmt.Sprintf("os.%s outside cmd/: configuration must be passed in explicitly", node.Sel.Name))
+			if refersTo(node.X, imps, "os") && slices.Contains(ambientOSCalls, node.Sel.Name) {
+				switch {
+				case !isCmd:
+					add(node.Pos(), kindAmbientAccess,
+						fmt.Sprintf("os.%s outside cmd/: configuration must be passed in explicitly", node.Sel.Name))
+				case !slices.Contains(namedEnvReads, node.Sel.Name):
+					add(node.Pos(), kindAmbientAccess,
+						fmt.Sprintf("os.%s in cmd/: read only the named settings the program declares with os.Getenv or os.LookupEnv", node.Sel.Name))
+				}
 			}
 		case *ast.CompositeLit:
 			if top == "commands" && !isTest && isCLIFlagLiteral(node, imps) {

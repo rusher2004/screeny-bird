@@ -11,7 +11,7 @@ These are review-blocking. They come from the owner's Go standards and, where no
 ### Configuration (overrides the standards brief)
 
 - **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. Dockerfile and Compose set no `ENV` defaults.
-- **Only `cmd/` touches ambient state.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. `main` hands explicit values down. Tests inject values; they do not use the real environment.
+- **Only `cmd/` touches ambient state.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. `main` reads only the settings the program declares, one named key per setting, into a typed config and hands that down. It never passes the environment itself, a map of it, or a lookup function. Tests inject values; they do not use the real environment.
 - Containers receive config from the runtime (Compose `env_file` in development, the orchestrator in production). Development and production use the same image path.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
 
@@ -44,7 +44,7 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 | Rule | Test |
 | --- | --- |
-| No ambient env/home/config access outside `cmd/` | `tools/ifaceaudit` `TestRepository` |
+| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys with `os.Getenv` or `os.LookupEnv`, never `os.Environ` or implicit directories | `tools/ifaceaudit` `TestRepository` |
 | No flag defaults in `commands` | `tools/ifaceaudit` `TestRepository` |
 | No type-only files or producer interfaces | `tools/ifaceaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
@@ -60,8 +60,8 @@ When a change affects commands, flags, exit codes or config keys, update `README
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. The one place errors are printed, exit codes chosen and the process environment read. It passes the environment down as a map. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Settings are flags with a matching `SCREENY_*` key looked up in the injected environment map; none has a default, and a missing or empty one returns `ErrMissingSetting`. |
+| `cmd/` | `main`. The one place errors are printed, exit codes chosen and the process environment read. It reads only the settings the program declares into a typed `commands.Config` and passes that down, never the whole environment. |
+| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Settings are fields of `Config`, each overridable by a flag; none has a default, and a missing or empty one returns `ErrMissingSetting`. |
 | `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |

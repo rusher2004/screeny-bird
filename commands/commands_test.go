@@ -132,24 +132,24 @@ func TestCatalogValidateReportsSpeciesCount(t *testing.T) {
 	}
 }
 
-func TestCatalogValidateReadsSettingFromInjectedEnv(t *testing.T) {
+func TestCatalogValidateReadsSettingFromConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
-		env  map[string]string
+		cfg  commands.Config
 		args []string
 		want string
 	}{
 		{
-			name: "environment supplies the directory",
-			env:  map[string]string{"SCREENY_CATALOG": "/from/env"},
+			name: "config supplies the directory",
+			cfg:  commands.Config{Catalog: "/from/config"},
 			args: []string{"catalog", "validate"},
-			want: "/from/env",
+			want: "/from/config",
 		},
 		{
-			name: "flag wins over environment",
-			env:  map[string]string{"SCREENY_CATALOG": "/from/env"},
+			name: "flag wins over config",
+			cfg:  commands.Config{Catalog: "/from/config"},
 			args: []string{"catalog", "validate", "--catalog", "/from/flag"},
 			want: "/from/flag",
 		},
@@ -161,7 +161,7 @@ func TestCatalogValidateReadsSettingFromInjectedEnv(t *testing.T) {
 
 			fake := &fakeCatalogs{}
 
-			opts := commands.Options{Version: "1.2.3", Env: tt.env, Catalogs: fake}
+			opts := commands.Options{Version: "1.2.3", Config: tt.cfg, Catalogs: fake}
 			if _, _, err := run(t, opts, tt.args...); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -177,14 +177,13 @@ func TestCatalogValidateRequiresTheSetting(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		env  map[string]string
+		cfg  commands.Config
 		args []string
 	}{
-		"nothing provided":      {args: []string{"catalog", "validate"}},
-		"empty environment":     {env: map[string]string{"SCREENY_CATALOG": ""}, args: []string{"catalog", "validate"}},
-		"empty flag":            {args: []string{"catalog", "validate", "--catalog", ""}},
-		"empty flag over env":   {env: map[string]string{"SCREENY_CATALOG": "/from/env"}, args: []string{"catalog", "validate", "--catalog", ""}},
-		"unrelated environment": {env: map[string]string{"OTHER": "x"}, args: []string{"catalog", "validate"}},
+		"nothing provided":       {args: []string{"catalog", "validate"}},
+		"blank config value":     {cfg: commands.Config{Catalog: "  "}, args: []string{"catalog", "validate"}},
+		"empty flag":             {args: []string{"catalog", "validate", "--catalog", ""}},
+		"empty flag over config": {cfg: commands.Config{Catalog: "/from/config"}, args: []string{"catalog", "validate", "--catalog", ""}},
 	}
 
 	for name, tt := range tests {
@@ -193,12 +192,12 @@ func TestCatalogValidateRequiresTheSetting(t *testing.T) {
 
 			fake := &fakeCatalogs{}
 
-			_, _, err := run(t, commands.Options{Version: "1.2.3", Env: tt.env, Catalogs: fake}, tt.args...)
+			_, _, err := run(t, commands.Options{Version: "1.2.3", Config: tt.cfg, Catalogs: fake}, tt.args...)
 			if !errors.Is(err, commands.ErrMissingSetting) {
 				t.Fatalf("Run() error = %v, want ErrMissingSetting", err)
 			}
 
-			for _, want := range []string{"--catalog", "SCREENY_CATALOG"} {
+			for _, want := range []string{"--catalog", commands.EnvCatalog} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error %q does not name %s", err, want)
 				}
