@@ -28,14 +28,15 @@ These are review-blocking. They come from the owner's Go standards and, where no
 
 ### Interfaces
 
-- The consumer declares the smallest interface it needs, in its own package, next to the code that uses it. Producer packages export concrete types and no interfaces. Accept interfaces, return structs. Factories return an untyped `nil, err`, never a typed nil in an interface.
+- Follow dependency inversion. The package that uses a capability declares the smallest interface it needs, next to the code that uses it, with exactly the methods it calls. Implementations are concrete types that do not declare interfaces for their callers. Accept interfaces, return structs. Factories return an untyped `nil, err`, never a typed nil in an interface.
+- Any package may consume capabilities from some packages and provide them to others. No package is classified or restricted by role; the question in review is whether each dependency is injected through an interface its consumer declared.
 - No file exists only to declare types, and no `*_iface.go`.
-- `commands` is the composition root. It adapts producers to the interfaces it needs. Command code has no system-specific branching.
-- `tools/ifaceaudit` enforces this mechanically. Its producer list lives in `tools/ifaceaudit/main.go`; update it when adding a producer package.
+- `commands` is the composition root. It adapts implementations to the interfaces it needs. Command code has no system-specific branching.
+- Dependency inversion cannot be checked mechanically, so it is a review judgment. `tools/repoaudit` checks only the mechanical rules.
 
 ### Tests
 
-- Tests run from outside the package: `foo_test.go` is `package foo_test`. Never test unexported identifiers. If something cannot be tested through the exported API, fix the API; never export only for a test. `package main` is the exception (it cannot be imported), as is `tools/ifaceaudit`, which is a `package main`.
+- Tests run from outside the package: `foo_test.go` is `package foo_test`. Never test unexported identifiers. If something cannot be tested through the exported API, fix the API; never export only for a test. `package main` is the exception (it cannot be imported), as is `tools/repoaudit`, which is a `package main`.
 - One `x_test.go` per `x.go`; none without its source file. `testdata/` is not a test file.
 - Tests never run real subprocesses, make real network calls, read the real environment, or write outside `t.TempDir()`. Inject the clock, process runner and other seams. Use `t.Setenv` only in `package main` tests.
 - Write the test first. Code that decides a risky or irreversible action (parsing, gating, policy, expiry) is fully covered.
@@ -46,9 +47,9 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 | Rule | Test |
 | --- | --- |
-| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys, never `os.Environ` or implicit directories | `tools/ifaceaudit` `TestRepository` |
-| No flag defaults in `commands` | `tools/ifaceaudit` `TestRepository` |
-| No type-only files or producer interfaces | `tools/ifaceaudit` `TestRepository` |
+| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys, never `os.Environ` or implicit directories | `tools/repoaudit` `TestRepository` |
+| No flag defaults in `commands` | `tools/repoaudit` `TestRepository` |
+| No type-only files | `tools/repoaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
 | Review gate, location-free review, private fields and local paths, image size/format/metadata, checksums, unexpected files, symlinks, schema version, index matches manifests | `catalog` tests (`review_test`, `privacy_test`, `image_test`, `manifest_test`, `index_test`, `catalog_test`) |
 | Approved taxa are immutable; staged changes hold only the index and new species | Pending: M3 `upstream` sync |
@@ -64,7 +65,7 @@ When a change affects commands, flags, exit codes or config keys, update `README
 | --- | --- |
 | `cmd/` | `main`. Parses its leading `--config` flag, loads settings through its `configLoader` interface, maps them to `commands.Settings`, and is the one place errors are printed and exit codes chosen. |
 | `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares `Settings`; each command checks the settings it needs and fails with `ErrMissingSetting`. |
-| `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
+| `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
 | `config/` | `Config` and its loaders. `TOMLFile` reads the settings strictly from a TOML file: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |

@@ -44,7 +44,7 @@ Settings come from a TOML file named with a leading `--config <path>` flag; [con
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `cmd`, `commands`, `config`, `catalog` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `cmd`, `commands`, `config`, `catalog` and the `tools/repoaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 

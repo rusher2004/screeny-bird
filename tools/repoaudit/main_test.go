@@ -8,14 +8,10 @@ import (
 	"testing"
 )
 
-const fixtureModule = "example.test/screeny"
-
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 
 	root := t.TempDir()
-	files["go.mod"] = "module " + fixtureModule + "\n\ngo 1.27\n"
-
 	for name, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -83,14 +79,6 @@ func TestAuditReportsViolations(t *testing.T) {
 			},
 			kind: kindTypeOnlyFile,
 			path: "commands/reader_iface.go",
-		},
-		{
-			name: "interface in producer package",
-			files: map[string]string{
-				"server/server.go": "package server\n\ntype Reader interface{ Read() error }\n\nfunc F() {}\n",
-			},
-			kind: kindProducerInterface,
-			path: "server/server.go",
 		},
 		{
 			name: "env read outside cmd",
@@ -161,38 +149,6 @@ func TestAuditReportsViolations(t *testing.T) {
 	}
 }
 
-func TestAuditListsProducerTypeUse(t *testing.T) {
-	t.Parallel()
-
-	root := writeTree(t, map[string]string{
-		"catalog/catalog.go": "package catalog\n\ntype Store struct{}\n\nfunc F() {}\n",
-		"commands/commands.go": "package commands\n\nimport \"" + fixtureModule + "/catalog\"\n\n" +
-			"func Use(s *catalog.Store) {}\n",
-	})
-
-	got, err := audit(root)
-	if err != nil {
-		t.Fatalf("audit() error = %v", err)
-	}
-
-	paths := kinds(got)[kindProducerTypeUse]
-	if len(paths) != 1 || paths[0] != "commands/commands.go" {
-		t.Fatalf("audit() producer-type-use = %v, want [commands/commands.go]", paths)
-	}
-
-	if len(violations(got)) != 0 {
-		t.Fatalf("violations() = %v, want none: producer-type-use is informational", violations(got))
-	}
-}
-
-func TestAuditRejectsMissingModule(t *testing.T) {
-	t.Parallel()
-
-	if _, err := audit(t.TempDir()); err == nil {
-		t.Fatal("audit() error = nil, want error for a root without go.mod")
-	}
-}
-
 func TestRun(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +176,7 @@ func TestRun(t *testing.T) {
 			files:      map[string]string{},
 			args:       func(string) []string { return nil },
 			wantCode:   2,
-			wantStderr: "ifaceaudit: -root is required\n",
+			wantStderr: "repoaudit: -root is required\n",
 		},
 	}
 
@@ -258,7 +214,7 @@ func TestRepository(t *testing.T) {
 		t.Fatalf("audit(repository) error = %v", err)
 	}
 
-	for _, f := range violations(got) {
+	for _, f := range got {
 		t.Errorf("%s", f)
 	}
 }
