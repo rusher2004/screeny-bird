@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go fix
+        run: go fix ./... && git diff --exit-code
+      - name: go generate
+        run: go generate ./... && git diff --exit-code
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go build
+        run: go build ./...
+      - name: go mod tidy
+        run: go mod tidy && git diff --exit-code
+
+  version-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a higher VERSION for release-significant changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          significant=false
+          while IFS= read -r file; do
+            case "$file" in
+              *_test.go) ;;
+              *.go | go.mod | go.sum | .goreleaser.yaml | Dockerfile) significant=true ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA"...HEAD)
+
+          if [ "$significant" = false ]; then
+            echo "No release-significant change; VERSION need not change."
+            exit 0
+          fi
+
+          if ! base_version="$(git show "$BASE_SHA:VERSION" 2>/dev/null | tr -d '[:space:]')" || [ -z "$base_version" ]; then
+            echo "The base has no VERSION yet; this change sets the first one."
+            exit 0
+          fi
+          head_version="$(tr -d '[:space:]' < VERSION)"
+          highest="$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -n 1)"
+
+          if [ "$base_version" = "$head_version" ] || [ "$highest" != "$head_version" ]; then
+            echo "VERSION must increase: base is $base_version, this change has $head_version."
+            exit 1
+          fi
+
+  ci:
+    if: always()
+    needs: [checks, version-gate]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Aggregate result
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          VERSION_GATE: ${{ needs.version-gate.result }}
+        run: |
+          [ "$CHECKS" = success ] || { echo "checks: $CHECKS"; exit 1; }
+          case "$VERSION_GATE" in
+            success | skipped) ;;
+            *) echo "version-gate: $VERSION_GATE"; exit 1 ;;
+          esac
