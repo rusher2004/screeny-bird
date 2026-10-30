@@ -29,14 +29,14 @@ func main() {
 
 // run reads main's own leading --config flag, wires the TOML file loader it
 // names, and executes the rest of the command line.
-func run(ctx context.Context, version string, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, version string, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
-		return report(stderr, &commands.ExitError{Code: commands.ExitUsage, Msg: "usage: missing program name"})
+		return report(errOut, &commands.ExitError{Code: commands.ExitUsage, Msg: "usage: missing program name"})
 	}
 
 	path, rest, err := splitConfigFlag(args[1:])
 	if err != nil {
-		return report(stderr, err)
+		return report(errOut, err)
 	}
 
 	var loader configLoader
@@ -44,7 +44,7 @@ func run(ctx context.Context, version string, args []string, stdout, stderr io.W
 		loader = config.TOMLFile{FS: os.DirFS(filepath.Dir(path)), Name: filepath.Base(path)}
 	}
 
-	return execute(ctx, version, loader, append([]string{args[0]}, rest...), stdout, stderr)
+	return execute(ctx, version, loader, append([]string{args[0]}, rest...), out, errOut)
 }
 
 // splitConfigFlag removes a leading --config <path> or --config=<path> from
@@ -76,19 +76,19 @@ func splitConfigFlag(args []string) (path string, rest []string, err error) {
 
 // execute loads settings from loader, when there is one, and runs the command
 // line. It is the one place errors are printed and exit codes are chosen.
-func execute(ctx context.Context, version string, loader configLoader, args []string, stdout, stderr io.Writer) int {
+func execute(ctx context.Context, version string, loader configLoader, args []string, out, errOut io.Writer) int {
 	var settings commands.Settings
 
 	if loader != nil {
 		cfg, err := loader.Load()
 		if err != nil {
-			return report(stderr, fmt.Errorf("loading config: %w", err))
+			return report(errOut, fmt.Errorf("loading config: %w", err))
 		}
 
 		settings = commands.Settings{CatalogDir: cfg.CatalogDir}
 	}
 
-	cmd, err := commands.New(commands.Options{Version: version, Stdout: stdout, Stderr: stderr, Settings: settings})
+	cmd, err := commands.New(commands.Options{Version: version, Out: out, ErrOut: errOut, Settings: settings})
 	if err == nil {
 		err = cmd.Run(ctx, args)
 	}
@@ -101,14 +101,14 @@ func execute(ctx context.Context, version string, loader configLoader, args []st
 		err = fmt.Errorf("%w (no config source was given: pass --config <path> before the command)", err)
 	}
 
-	return report(stderr, err)
+	return report(errOut, err)
 }
 
 // report prints err once and returns the exit code it carries, or 1.
-func report(stderr io.Writer, err error) int {
-	// Nothing useful can be done if stderr itself is unwritable, and the exit
-	// code below already reports the failure.
-	_, _ = fmt.Fprintf(stderr, "screeny: %v\n", err)
+func report(w io.Writer, err error) int {
+	// Nothing useful can be done if the writer itself fails, and the exit code
+	// below already reports the failure.
+	_, _ = fmt.Fprintf(w, "screeny: %v\n", err)
 
 	if exitErr, ok := errors.AsType[*commands.ExitError](err); ok {
 		return exitErr.Code

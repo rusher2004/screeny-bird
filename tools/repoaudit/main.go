@@ -57,30 +57,30 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, out, errOut io.Writer) int {
 	flags := flag.NewFlagSet("repoaudit", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 
 	root := flags.String("root", "", "repository root (required)")
 
 	if err := flags.Parse(args); err != nil {
-		return reportUsage(stderr, fmt.Sprintf("%v", err))
+		return reportUsage(errOut, fmt.Sprintf("%v", err))
 	}
 
 	if *root == "" {
-		return reportUsage(stderr, "-root is required")
+		return reportUsage(errOut, "-root is required")
 	}
 
 	all, err := audit(*root)
 	if err != nil {
-		// Nothing useful can be done if stderr is unwritable; the exit code reports the failure.
-		_, _ = fmt.Fprintf(stderr, "repoaudit: %v\n", err)
+		// Nothing useful can be done if the writer itself fails; the exit code reports the failure.
+		_, _ = fmt.Fprintf(errOut, "repoaudit: %v\n", err)
 
 		return 1
 	}
 
 	for _, f := range all {
-		if _, err := fmt.Fprintln(stdout, f); err != nil {
+		if _, err := fmt.Fprintln(out, f); err != nil {
 			return 1
 		}
 	}
@@ -92,9 +92,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func reportUsage(stderr io.Writer, msg string) int {
-	// Nothing useful can be done if stderr is unwritable; the exit code reports the failure.
-	_, _ = fmt.Fprintf(stderr, "repoaudit: %s\n", msg)
+func reportUsage(w io.Writer, msg string) int {
+	// Nothing useful can be done if the writer itself fails; the exit code reports the failure.
+	_, _ = fmt.Fprintf(w, "repoaudit: %s\n", msg)
 
 	return 2
 }

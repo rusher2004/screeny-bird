@@ -17,8 +17,8 @@ func run(t *testing.T, opts commands.Options, args ...string) (stdout, stderr st
 	t.Helper()
 
 	var out, errOut bytes.Buffer
-	opts.Stdout = &out
-	opts.Stderr = &errOut
+	opts.Out = &out
+	opts.ErrOut = &errOut
 
 	cmd, err := commands.New(opts)
 	if err != nil {
@@ -34,9 +34,9 @@ func TestNewRejectsMissingOptions(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]commands.Options{
-		"version": {Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}},
-		"stdout":  {Version: "1.2.3", Stderr: &bytes.Buffer{}},
-		"stderr":  {Version: "1.2.3", Stdout: &bytes.Buffer{}},
+		"version": {Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+		"out":     {Version: "1.2.3", ErrOut: &bytes.Buffer{}},
+		"errOut":  {Version: "1.2.3", Out: &bytes.Buffer{}},
 	}
 
 	for name, opts := range tests {
