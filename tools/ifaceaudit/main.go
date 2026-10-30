@@ -31,7 +31,7 @@ const (
 // producerPackages are the packages that export concrete types for callers.
 // They must declare no interfaces, and callers should reach them through
 // small consumer-defined interfaces instead of their concrete types.
-var producerPackages = []string{"catalog", "server", "upstream", "derive", "fsutil"}
+var producerPackages = []string{"catalog", "config", "server", "upstream", "derive", "fsutil"}
 
 // ambientOSCalls read or change process-wide ambient state. Outside cmd/ every
 // one is banned: packages receive their configuration explicitly.

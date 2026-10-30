@@ -10,9 +10,10 @@ These are review-blocking. They come from the owner's Go standards and, where no
 
 ### Configuration (overrides the standards brief)
 
-- **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. Dockerfile and Compose set no `ENV` defaults.
-- **Only `cmd/` touches ambient state.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. `main` reads only the settings the program declares, one named key per setting, into a typed config and hands that down. It never passes the environment itself, a map of it, or a lookup function. Tests inject values; they do not use the real environment.
-- Containers receive config from the runtime (Compose `env_file` in development, the orchestrator in production). Development and production use the same image path.
+- **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
+- **The service does not care where config comes from.** Commands receive a typed `config.Config` through a small interface declared in `commands`. Today it is loaded from a TOML file whose path is the `--config` flag; the file is decoded strictly, so unknown keys, wrong types and missing or empty values are errors. Changing the source touches `config/` and the composition root only.
+- **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. `cmd/` may make only named `os.Getenv` or `os.LookupEnv` reads, never pass the whole environment down, and currently makes none. Tests inject values and do not use the real environment.
+- Containers receive the config file the same way in development and production, as a mounted file.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
 
 ### Errors
@@ -44,7 +45,7 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 | Rule | Test |
 | --- | --- |
-| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys with `os.Getenv` or `os.LookupEnv`, never `os.Environ` or implicit directories | `tools/ifaceaudit` `TestRepository` |
+| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys, never `os.Environ` or implicit directories | `tools/ifaceaudit` `TestRepository` |
 | No flag defaults in `commands` | `tools/ifaceaudit` `TestRepository` |
 | No type-only files or producer interfaces | `tools/ifaceaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
@@ -54,15 +55,16 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 ### Docs
 
-When a change affects commands, flags, exit codes or config keys, update `README.md` and this file in the same change. The first setting adds a `.env.example` listing the required keys, and later settings keep it current. Architecture changes update the package table. Release-significant changes (non-test Go, `go.mod`, `go.sum`, `.goreleaser.yaml`, `Dockerfile`) require a strictly higher `VERSION`; CI enforces it.
+When a change affects commands, flags, exit codes or config keys, update `README.md`, `config.example.toml` and this file in the same change. Architecture changes update the package table. Release-significant changes (non-test Go, `go.mod`, `go.sum`, `.goreleaser.yaml`, `Dockerfile`) require a strictly higher `VERSION`; CI enforces it.
 
 ## Packages
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. The one place errors are printed, exit codes chosen and the process environment read. It reads only the settings the program declares into a typed `commands.Config` and passes that down, never the whole environment. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Settings are fields of `Config`, each overridable by a flag; none has a default, and a missing or empty one returns `ErrMissingSetting`. |
+| `cmd/` | `main`. The one place errors are printed and exit codes chosen. |
+| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. The root `--config` flag names the settings file; commands load it through a small interface and fail with `ErrMissingSetting` when it is absent. |
 | `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
+| `config/` | `Load` reads the TOML settings file strictly into `Config`: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |

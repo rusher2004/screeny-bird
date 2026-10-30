@@ -1,0 +1,5 @@
+# Every setting is required. There are no defaults: a missing or empty value
+# stops the command with an error naming the setting.
+
+# Directory holding the catalog's index.json and species/ (catalog validate).
+catalog_dir = "/data/catalog"

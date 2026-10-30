@@ -4,7 +4,7 @@ Apply these to every pull request, on top of `CLAUDE.md`. Report only what the c
 
 ## Important (must fix)
 
-- A default value for any setting, or any read of the process environment, home or config directory outside `cmd/`. In `cmd/`, anything but a named `os.Getenv` or `os.LookupEnv` read, or the whole environment, a map of it or a lookup function passed down.
+- A default value for any setting, or any read of the process environment, home or config directory outside `cmd/`. In `cmd/`, anything but a named `os.Getenv` or `os.LookupEnv` read, or the whole environment, a map of it or a lookup function passed down. A config source (environment, file path) known to a package other than `config/` and the composition root.
 - An interface declared in a producer package, or a function, constructor or struct field taking a concrete producer type instead of a small consumer-defined interface. A typed nil returned through an interface.
 - An error that is ignored, returned bare across a package boundary, or logged and swallowed below `main`. `%v` or `%s` where `%w` works.
 - A test in the package it tests, a test of an unexported identifier, a test that runs a real process, touches the network, or writes outside `t.TempDir()`.

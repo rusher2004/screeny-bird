@@ -43,5 +43,6 @@ SOFTWARE.
 | Module | License | Source |
 | --- | --- | --- |
 | `github.com/urfave/cli/v3` | MIT, Copyright (c) 2023 urfave/cli maintainers | <https://github.com/urfave/cli> |
+| `github.com/pelletier/go-toml/v2` | MIT, Copyright (c) 2021 - 2023 Thomas Pelletier | <https://github.com/pelletier/go-toml> |
 
 Installed Go modules retain the license and copyright material in their own repositories.

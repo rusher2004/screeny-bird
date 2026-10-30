@@ -25,11 +25,11 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 
 ## Configuration
 
-Every setting is required.
+Settings come from a TOML file; [config.example.toml](config.example.toml) shows every one. All are required.
 
 | Setting | Used by | Meaning |
 | --- | --- | --- |
-| `SCREENY_CATALOG` | `catalog validate` | Directory holding the catalog's `index.json` and `species/`. |
+| `catalog_dir` | `catalog validate` | Directory holding the catalog's `index.json` and `species/`. |
 
 ## Packages
 
@@ -37,13 +37,14 @@ Every setting is required.
 | --- | --- |
 | `cmd` | The entry point. |
 | `commands` | The command tree and the wiring that connects the other packages. |
+| `config` | Loading the settings file. |
 | `catalog` | Reading and validating species, manifests and the index. |
 | `upstream` | Fetching the source catalog. |
 | `derive` | Building screensaver-sized images. |
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `cmd`, `commands`, `catalog` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `cmd`, `commands`, `config`, `catalog` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 

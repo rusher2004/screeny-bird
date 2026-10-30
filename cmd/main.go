@@ -15,22 +15,13 @@ import (
 var version string
 
 func main() {
-	os.Exit(run(context.Background(), version, configFromEnv(os.Getenv), os.Args, os.Stdout, os.Stderr))
-}
-
-// configFromEnv reads exactly the settings the program declares, and nothing
-// else, from the environment. main is the only code that reads the process
-// environment; everything else receives this Config.
-func configFromEnv(getenv func(string) string) commands.Config {
-	return commands.Config{
-		Catalog: getenv(commands.EnvCatalog),
-	}
+	os.Exit(run(context.Background(), version, os.Args, os.Stdout, os.Stderr))
 }
 
 // run executes the command line and returns the process exit code. It is the
 // one place errors are printed and exit codes are chosen.
-func run(ctx context.Context, version string, cfg commands.Config, args []string, stdout, stderr io.Writer) int {
-	cmd, err := commands.New(commands.Options{Version: version, Stdout: stdout, Stderr: stderr, Config: cfg})
+func run(ctx context.Context, version string, args []string, stdout, stderr io.Writer) int {
+	cmd, err := commands.New(commands.Options{Version: version, Stdout: stdout, Stderr: stderr})
 	if err == nil {
 		err = cmd.Run(ctx, args)
 	}

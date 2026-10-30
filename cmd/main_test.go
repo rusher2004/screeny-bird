@@ -3,11 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/rusher2004/screeny-bird/commands"
 )
 
 func TestRun(t *testing.T) {
@@ -16,7 +15,6 @@ func TestRun(t *testing.T) {
 	tests := []struct {
 		name       string
 		version    string
-		cfg        commands.Config
 		args       []string
 		wantCode   int
 		wantStdout string
@@ -41,7 +39,7 @@ func TestRun(t *testing.T) {
 			version:    "1.2.3",
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
-			wantStderr: "screeny: missing required setting: pass --catalog or set SCREENY_CATALOG\n",
+			wantStderr: "screeny: missing required setting: pass --config with the path to the config file\n",
 		},
 		{
 			name:       "missing version is a runtime error",
@@ -58,7 +56,7 @@ func TestRun(t *testing.T) {
 
 			var stdout, stderr bytes.Buffer
 
-			code := run(context.Background(), tt.version, tt.cfg, tt.args, &stdout, &stderr)
+			code := run(context.Background(), tt.version, tt.args, &stdout, &stderr)
 
 			if code != tt.wantCode {
 				t.Errorf("run() code = %d, want %d", code, tt.wantCode)
@@ -75,29 +73,7 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestConfigFromEnvReadsOnlyDeclaredSettings(t *testing.T) {
-	t.Parallel()
-
-	var asked []string
-
-	getenv := func(key string) string {
-		asked = append(asked, key)
-
-		return map[string]string{"SCREENY_CATALOG": "/data/catalog", "HOME": "/home/someone"}[key]
-	}
-
-	got := configFromEnv(getenv)
-
-	if got.Catalog != "/data/catalog" {
-		t.Errorf("configFromEnv().Catalog = %q, want /data/catalog", got.Catalog)
-	}
-
-	if len(asked) != 1 || asked[0] != "SCREENY_CATALOG" {
-		t.Errorf("configFromEnv() read %v, want only [SCREENY_CATALOG]", asked)
-	}
-}
-
-func TestRunPassesConfigToCommands(t *testing.T) {
+func TestRunLoadsTheConfigFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -112,9 +88,14 @@ func TestRunPassesConfigToCommands(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	cfg := commands.Config{Catalog: dir}
+	configPath := filepath.Join(t.TempDir(), "screeny.toml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("catalog_dir = %q\n", dir)), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
-	code := run(context.Background(), "1.2.3", cfg, []string{"screeny", "catalog", "validate"}, &stdout, &stderr)
+	args := []string{"screeny", "--config", configPath, "catalog", "validate"}
+
+	code := run(context.Background(), "1.2.3", args, &stdout, &stderr)
 	if code != 0 || stdout.String() != "validated 0 species\n" || stderr.Len() != 0 {
 		t.Fatalf("run() = code %d, stdout %q, stderr %q; want 0, %q and no stderr", code, stdout.String(), stderr.String(), "validated 0 species\n")
 	}

@@ -1,7 +1,5 @@
-# Local configuration and secrets: containers receive config explicitly.
-.env
-.env.*
-!.env.example
+# Local config files with real values; config.example.toml is the committed example.
+*.local.toml
 
 # Build output
 /dist/
