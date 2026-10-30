@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,6 +14,7 @@ func TestRun(t *testing.T) {
 	tests := []struct {
 		name       string
 		version    string
+		env        map[string]string
 		args       []string
 		wantCode   int
 		wantStdout string
@@ -32,6 +35,13 @@ func TestRun(t *testing.T) {
 			wantStderr: "screeny: usage: flag provided but not defined: -no-such-flag\n",
 		},
 		{
+			name:       "missing setting is a runtime error",
+			version:    "1.2.3",
+			args:       []string{"screeny", "catalog", "validate"},
+			wantCode:   1,
+			wantStderr: "screeny: missing required setting: pass --catalog or set SCREENY_CATALOG\n",
+		},
+		{
 			name:       "missing version is a runtime error",
 			version:    "",
 			args:       []string{"screeny", "version"},
@@ -46,7 +56,7 @@ func TestRun(t *testing.T) {
 
 			var stdout, stderr bytes.Buffer
 
-			code := run(context.Background(), tt.version, tt.args, &stdout, &stderr)
+			code := run(context.Background(), tt.version, tt.env, tt.args, &stdout, &stderr)
 
 			if code != tt.wantCode {
 				t.Errorf("run() code = %d, want %d", code, tt.wantCode)
@@ -60,5 +70,45 @@ func TestRun(t *testing.T) {
 				t.Errorf("run() stderr = %q, want %q", got, tt.wantStderr)
 			}
 		})
+	}
+}
+
+func TestEnvironMap(t *testing.T) {
+	t.Parallel()
+
+	got := environMap([]string{"A=1", "B=", "C=x=y", "NOEQUALS"})
+
+	want := map[string]string{"A": "1", "B": "", "C": "x=y"}
+	if len(got) != len(want) {
+		t.Fatalf("environMap() = %v, want %v", got, want)
+	}
+
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("environMap()[%q] = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
+func TestRunPassesEnvironmentToCommands(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "species"), 0o755); err != nil {
+		t.Fatalf("creating species directory: %v", err)
+	}
+
+	index := `{"generated_at": null, "schema_version": 1, "species": []}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	env := map[string]string{"SCREENY_CATALOG": dir}
+
+	code := run(context.Background(), "1.2.3", env, []string{"screeny", "catalog", "validate"}, &stdout, &stderr)
+	if code != 0 || stdout.String() != "validated 0 species\n" || stderr.Len() != 0 {
+		t.Fatalf("run() = code %d, stdout %q, stderr %q; want 0, %q and no stderr", code, stdout.String(), stderr.String(), "validated 0 species\n")
 	}
 }

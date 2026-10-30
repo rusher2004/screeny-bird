@@ -2,8 +2,7 @@
 
 Inspired by [Inky Bird Frame]. The server and tooling behind a macOS and tvOS screensaver that shows field-journal plates of birds.
 
-> **Status: early scaffold.** The command tree builds and reports its version.
-> Catalog validation, syncing and serving are next.
+> **Status: early scaffold.** Catalog validation works. Syncing and serving are next.
 
 ## What it does
 
@@ -17,12 +16,20 @@ A catalog of approved bird plates, one illustrated image and profile per species
 | Command | Purpose | Status |
 | --- | --- | --- |
 | `screeny version` | Print the version. | Done |
-| `screeny catalog validate` | Check the catalog against its rules. | Planned |
+| `screeny catalog validate` | Check the catalog against its rules. | Done |
 | `screeny catalog sync` | Fetch and verify the upstream catalog. | Planned |
 | `screeny catalog derive` | Build screensaver-sized images. | Planned |
 | `screeny serve` | Serve the catalog and images. | Planned |
 
 Choosing which plate appears next belongs to the screensaver apps, not this service.
+
+## Configuration
+
+Every setting is required.
+
+| Setting | Used by | Meaning |
+| --- | --- | --- |
+| `SCREENY_CATALOG` | `catalog validate` | Directory holding the catalog's `index.json` and `species/`. |
 
 ## Packages
 

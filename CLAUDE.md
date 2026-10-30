@@ -60,8 +60,8 @@ When a change affects commands, flags, exit codes or config keys, update `README
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. The one place errors are printed and exit codes chosen. Reads no config yet; when it does, it is the only reader of ambient state. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. |
+| `cmd/` | `main`. The one place errors are printed, exit codes chosen and the process environment read. It passes the environment down as a map. |
+| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Settings are flags with a matching `SCREENY_*` key looked up in the injected environment map; none has a default, and a missing or empty one returns `ErrMissingSetting`. |
 | `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
