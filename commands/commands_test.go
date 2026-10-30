@@ -13,30 +13,28 @@ import (
 	"github.com/rusher2004/screeny-bird/commands"
 )
 
-func run(t *testing.T, opts commands.Options, args ...string) (stdout, stderr string, err error) {
+func run(t *testing.T, opts commands.Options, args ...string) (output string, err error) {
 	t.Helper()
 
-	var out, errOut bytes.Buffer
-	opts.Out = &out
-	opts.ErrOut = &errOut
+	var buf bytes.Buffer
+	opts.Output = &buf
 
 	cmd, err := commands.New(opts)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	err = cmd.Run(context.Background(), append([]string{"screeny"}, args...))
 
-	return out.String(), errOut.String(), err
+	return buf.String(), err
 }
 
 func TestNewRejectsMissingOptions(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]commands.Options{
-		"version": {Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
-		"out":     {Version: "1.2.3", ErrOut: &bytes.Buffer{}},
-		"errOut":  {Version: "1.2.3", Out: &bytes.Buffer{}},
+		"version": {Output: &bytes.Buffer{}},
+		"output":  {Version: "1.2.3"},
 	}
 
 	for name, opts := range tests {
@@ -62,7 +60,7 @@ func TestNewRejectsMissingOptions(t *testing.T) {
 func TestVersionPrintsVersion(t *testing.T) {
 	t.Parallel()
 
-	stdout, _, err := run(t, commands.Options{Version: "1.2.3"}, "version")
+	stdout, err := run(t, commands.Options{Version: "1.2.3"}, "version")
 	if err != nil {
 		t.Fatalf("Run(version) error = %v", err)
 	}
@@ -84,7 +82,7 @@ func TestUsageErrorsCarryExitCodeTwo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, _, err := run(t, commands.Options{Version: "1.2.3"}, args...)
+			_, err := run(t, commands.Options{Version: "1.2.3"}, args...)
 			if err == nil {
 				t.Fatal("Run() error = nil, want usage error")
 			}
@@ -119,7 +117,7 @@ func TestCatalogValidateReportsSpeciesCount(t *testing.T) {
 	catalogs := &fakeCatalogs{species: 184}
 	opts := commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: "/data/catalog"}, Catalogs: catalogs}
 
-	stdout, _, err := run(t, opts, "catalog", "validate")
+	stdout, err := run(t, opts, "catalog", "validate")
 	if err != nil {
 		t.Fatalf("Run(catalog validate) error = %v", err)
 	}
@@ -147,7 +145,7 @@ func TestCatalogValidateRequiresTheCatalogDirSetting(t *testing.T) {
 
 			catalogs := &fakeCatalogs{}
 
-			_, _, err := run(t, commands.Options{Version: "1.2.3", Settings: settings, Catalogs: catalogs}, "catalog", "validate")
+			_, err := run(t, commands.Options{Version: "1.2.3", Settings: settings, Catalogs: catalogs}, "catalog", "validate")
 			if !errors.Is(err, commands.ErrMissingSetting) {
 				t.Fatalf("Run() error = %v, want ErrMissingSetting", err)
 			}
@@ -174,7 +172,7 @@ func TestCatalogValidateWrapsLoaderFailure(t *testing.T) {
 	catalogs := &fakeCatalogs{err: cause}
 	opts := commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: "/data/catalog"}, Catalogs: catalogs}
 
-	_, _, err := run(t, opts, "catalog", "validate")
+	_, err := run(t, opts, "catalog", "validate")
 	if !errors.Is(err, cause) {
 		t.Fatalf("Run() error = %v, want it to wrap %v", err, cause)
 	}
@@ -187,7 +185,7 @@ func TestCatalogValidateWrapsLoaderFailure(t *testing.T) {
 func TestCatalogRequiresASubcommand(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := run(t, commands.Options{Version: "1.2.3"}, "catalog")
+	_, err := run(t, commands.Options{Version: "1.2.3"}, "catalog")
 
 	exitErr, ok := errors.AsType[*commands.ExitError](err)
 	if !ok || exitErr.Code != commands.ExitUsage {
@@ -198,7 +196,7 @@ func TestCatalogRequiresASubcommand(t *testing.T) {
 func TestVersionNeedsNoSettings(t *testing.T) {
 	t.Parallel()
 
-	stdout, _, err := run(t, commands.Options{Version: "1.2.3"}, "version")
+	stdout, err := run(t, commands.Options{Version: "1.2.3"}, "version")
 	if err != nil || stdout != "1.2.3\n" {
 		t.Fatalf("Run(version) = %q, %v; want 1.2.3 with no settings", stdout, err)
 	}
@@ -217,7 +215,7 @@ func TestCatalogValidateUsesTheRealCatalogPackage(t *testing.T) {
 		t.Fatalf("writing index: %v", err)
 	}
 
-	stdout, _, err := run(t, commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: valid}}, "catalog", "validate")
+	stdout, err := run(t, commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: valid}}, "catalog", "validate")
 	if err != nil {
 		t.Fatalf("Run() on a valid empty catalog error = %v", err)
 	}
@@ -226,7 +224,7 @@ func TestCatalogValidateUsesTheRealCatalogPackage(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", stdout, "validated 0 species\n")
 	}
 
-	_, _, err = run(t, commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: t.TempDir()}}, "catalog", "validate")
+	_, err = run(t, commands.Options{Version: "1.2.3", Settings: commands.Settings{CatalogDir: t.TempDir()}}, "catalog", "validate")
 	if !errors.Is(err, catalog.ErrMissingFile) {
 		t.Fatalf("Run() on an empty directory error = %v, want catalog.ErrMissingFile", err)
 	}

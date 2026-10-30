@@ -24,19 +24,20 @@ type configLoader interface {
 }
 
 func main() {
-	os.Exit(run(context.Background(), version, os.Args, os.Stdout, os.Stderr))
+	err := run(context.Background(), version, os.Args, os.Stdout)
+	os.Exit(report(os.Stderr, err))
 }
 
 // run reads main's own leading --config flag, wires the TOML file loader it
-// names, and executes the rest of the command line.
-func run(ctx context.Context, version string, args []string, out, errOut io.Writer) int {
+// names, and executes the rest of the command line, writing command output to w.
+func run(ctx context.Context, version string, args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return report(errOut, &commands.ExitError{Code: commands.ExitUsage, Msg: "usage: missing program name"})
+		return &commands.ExitError{Code: commands.ExitUsage, Msg: "usage: missing program name"}
 	}
 
 	path, rest, err := splitConfigFlag(args[1:])
 	if err != nil {
-		return report(errOut, err)
+		return err
 	}
 
 	var loader configLoader
@@ -44,7 +45,7 @@ func run(ctx context.Context, version string, args []string, out, errOut io.Writ
 		loader = config.TOMLFile{FS: os.DirFS(filepath.Dir(path)), Name: filepath.Base(path)}
 	}
 
-	return execute(ctx, version, loader, append([]string{args[0]}, rest...), out, errOut)
+	return execute(ctx, version, loader, append([]string{args[0]}, rest...), w)
 }
 
 // splitConfigFlag removes a leading --config <path> or --config=<path> from
@@ -75,37 +76,42 @@ func splitConfigFlag(args []string) (path string, rest []string, err error) {
 }
 
 // execute loads settings from loader, when there is one, and runs the command
-// line. It is the one place errors are printed and exit codes are chosen.
-func execute(ctx context.Context, version string, loader configLoader, args []string, out, errOut io.Writer) int {
+// line, writing command output to w.
+func execute(ctx context.Context, version string, loader configLoader, args []string, w io.Writer) error {
 	var settings commands.Settings
 
 	if loader != nil {
 		cfg, err := loader.Load()
 		if err != nil {
-			return report(errOut, fmt.Errorf("loading config: %w", err))
+			return fmt.Errorf("loading config: %w", err)
 		}
 
 		settings = commands.Settings{CatalogDir: cfg.CatalogDir}
 	}
 
-	cmd, err := commands.New(commands.Options{Version: version, Out: out, ErrOut: errOut, Settings: settings})
-	if err == nil {
-		err = cmd.Run(ctx, args)
+	cmd, err := commands.New(commands.Options{Version: version, Output: w, Settings: settings})
+	if err != nil {
+		return err
 	}
 
+	if err := cmd.Run(ctx, args); err != nil {
+		if loader == nil && errors.Is(err, commands.ErrMissingSetting) {
+			return fmt.Errorf("%w (no config source was given: pass --config <path> before the command)", err)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// report prints err to w once and returns the process exit code: 0 for no
+// error, the code an *commands.ExitError carries, or 1.
+func report(w io.Writer, err error) int {
 	if err == nil {
 		return 0
 	}
 
-	if loader == nil && errors.Is(err, commands.ErrMissingSetting) {
-		err = fmt.Errorf("%w (no config source was given: pass --config <path> before the command)", err)
-	}
-
-	return report(errOut, err)
-}
-
-// report prints err once and returns the exit code it carries, or 1.
-func report(w io.Writer, err error) int {
 	// Nothing useful can be done if the writer itself fails, and the exit code
 	// below already reports the failure.
 	_, _ = fmt.Fprintf(w, "screeny: %v\n", err)

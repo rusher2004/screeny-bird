@@ -53,42 +53,42 @@ func TestExecute(t *testing.T) {
 		loader     *fakeLoader
 		args       []string
 		wantCode   int
-		wantStdout string
-		wantStderr string
+		wantOutput string
+		wantReport string
 		wantLoads  int
 	}{
 		{
 			name:       "version prints and exits zero without any config source",
 			version:    "1.2.3",
 			args:       []string{"screeny", "version"},
-			wantStdout: "1.2.3\n",
+			wantOutput: "1.2.3\n",
 		},
 		{
 			name:       "usage error exits two",
 			version:    "1.2.3",
 			args:       []string{"screeny", "--no-such-flag"},
 			wantCode:   2,
-			wantStderr: "screeny: usage: flag provided but not defined: -no-such-flag\n",
+			wantReport: "screeny: usage: flag provided but not defined: -no-such-flag\n",
 		},
 		{
 			name:       "missing version is a runtime error",
 			args:       []string{"screeny", "version"},
 			wantCode:   1,
-			wantStderr: "screeny: building command tree: version: missing required option\n",
+			wantReport: "screeny: building command tree: version: missing required option\n",
 		},
 		{
 			name:       "a command that needs a setting says how it was left out",
 			version:    "1.2.3",
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
-			wantStderr: "screeny: catalog_dir: missing required setting (no config source was given: pass --config <path> before the command)\n",
+			wantReport: "screeny: catalog_dir: missing required setting (no config source was given: pass --config <path> before the command)\n",
 		},
 		{
 			name:       "loaded settings reach the command",
 			version:    "1.2.3",
 			loader:     &fakeLoader{cfg: config.Config{CatalogDir: catalogDir}},
 			args:       []string{"screeny", "catalog", "validate"},
-			wantStdout: "validated 0 species\n",
+			wantOutput: "validated 0 species\n",
 			wantLoads:  1,
 		},
 		{
@@ -97,7 +97,7 @@ func TestExecute(t *testing.T) {
 			loader:     &fakeLoader{err: errors.New("boom")},
 			args:       []string{"screeny", "version"},
 			wantCode:   1,
-			wantStderr: "screeny: loading config: boom\n",
+			wantReport: "screeny: loading config: boom\n",
 			wantLoads:  1,
 		},
 	}
@@ -107,8 +107,8 @@ func TestExecute(t *testing.T) {
 			t.Parallel()
 
 			var (
-				stdout, stderr bytes.Buffer
-				loader         configLoader
+				output, errText bytes.Buffer
+				loader          configLoader
 			)
 
 			// A nil *fakeLoader must stay a nil interface, not a typed nil.
@@ -116,18 +116,19 @@ func TestExecute(t *testing.T) {
 				loader = tt.loader
 			}
 
-			code := execute(context.Background(), tt.version, loader, tt.args, &stdout, &stderr)
+			err := execute(context.Background(), tt.version, loader, tt.args, &output)
+			code := report(&errText, err)
 
 			if code != tt.wantCode {
-				t.Errorf("execute() code = %d, want %d", code, tt.wantCode)
+				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
 			}
 
-			if got := stdout.String(); got != tt.wantStdout {
-				t.Errorf("execute() stdout = %q, want %q", got, tt.wantStdout)
+			if got := output.String(); got != tt.wantOutput {
+				t.Errorf("execute() output = %q, want %q", got, tt.wantOutput)
 			}
 
-			if got := stderr.String(); got != tt.wantStderr {
-				t.Errorf("execute() stderr = %q, want %q", got, tt.wantStderr)
+			if got := errText.String(); got != tt.wantReport {
+				t.Errorf("reported error = %q, want %q", got, tt.wantReport)
 			}
 
 			if tt.loader != nil && tt.loader.calls != tt.wantLoads {
@@ -183,11 +184,11 @@ func TestRunLoadsTheTOMLFileNamedByTheFlag(t *testing.T) {
 		t.Fatalf("writing config: %v", err)
 	}
 
-	var stdout, stderr bytes.Buffer
+	var output bytes.Buffer
 
-	code := run(context.Background(), "1.2.3", []string{"screeny", "--config", configPath, "catalog", "validate"}, &stdout, &stderr)
-	if code != 0 || stdout.String() != "validated 0 species\n" || stderr.Len() != 0 {
-		t.Fatalf("run() = code %d, stdout %q, stderr %q; want 0, %q and no stderr", code, stdout.String(), stderr.String(), "validated 0 species\n")
+	err := run(context.Background(), "1.2.3", []string{"screeny", "--config", configPath, "catalog", "validate"}, &output)
+	if err != nil || output.String() != "validated 0 species\n" {
+		t.Fatalf("run() = %q, %v; want %q and no error", output.String(), err, "validated 0 species\n")
 	}
 }
 
@@ -209,15 +210,26 @@ func TestRunReportsConfigFileProblems(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var stdout, stderr bytes.Buffer
+			var output, errText bytes.Buffer
 
-			if code := run(context.Background(), "1.2.3", tt.args, &stdout, &stderr); code != tt.wantCode {
-				t.Fatalf("run() code = %d, want %d (stderr %q)", code, tt.wantCode, stderr.String())
+			err := run(context.Background(), "1.2.3", tt.args, &output)
+			if err == nil {
+				t.Fatal("run() error = nil, want a failure")
 			}
 
-			if stderr.Len() == 0 {
-				t.Error("run() printed no error")
+			if code := report(&errText, err); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d (reported %q)", code, tt.wantCode, errText.String())
 			}
 		})
+	}
+}
+
+func TestReportReturnsZeroForNoError(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	if code := report(&buf, nil); code != 0 || buf.Len() != 0 {
+		t.Fatalf("report(nil) = code %d, wrote %q; want 0 and nothing", code, buf.String())
 	}
 }

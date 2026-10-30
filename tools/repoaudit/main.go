@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -53,50 +54,64 @@ func (f finding) String() string {
 	return fmt.Sprintf("%s:%d: %s: %s", f.Path, f.Line, f.Kind, f.Msg)
 }
 
+var (
+	errUsage    = errors.New("usage")
+	errFindings = errors.New("findings reported")
+)
+
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	err := run(os.Args[1:], os.Stdout)
+	os.Exit(report(os.Stderr, err))
 }
 
-func run(args []string, out, errOut io.Writer) int {
+// run audits the repository named by -root and writes each finding to w.
+func run(args []string, w io.Writer) error {
 	flags := flag.NewFlagSet("repoaudit", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 
 	root := flags.String("root", "", "repository root (required)")
 
 	if err := flags.Parse(args); err != nil {
-		return reportUsage(errOut, fmt.Sprintf("%v", err))
+		return fmt.Errorf("%w: %w", errUsage, err)
 	}
 
 	if *root == "" {
-		return reportUsage(errOut, "-root is required")
+		return fmt.Errorf("%w: -root is required", errUsage)
 	}
 
 	all, err := audit(*root)
 	if err != nil {
-		// Nothing useful can be done if the writer itself fails; the exit code reports the failure.
-		_, _ = fmt.Fprintf(errOut, "repoaudit: %v\n", err)
-
-		return 1
+		return err
 	}
 
 	for _, f := range all {
-		if _, err := fmt.Fprintln(out, f); err != nil {
-			return 1
+		if _, err := fmt.Fprintln(w, f); err != nil {
+			return fmt.Errorf("writing findings: %w", err)
 		}
 	}
 
 	if len(all) > 0 {
-		return 1
+		return fmt.Errorf("%d findings: %w", len(all), errFindings)
 	}
 
-	return 0
+	return nil
 }
 
-func reportUsage(w io.Writer, msg string) int {
-	// Nothing useful can be done if the writer itself fails; the exit code reports the failure.
-	_, _ = fmt.Fprintf(w, "repoaudit: %s\n", msg)
+// report prints err to w and returns the exit code: 0 for no error, 2 for a
+// usage error, 1 otherwise.
+func report(w io.Writer, err error) int {
+	if err == nil {
+		return 0
+	}
 
-	return 2
+	// Nothing useful can be done if the writer itself fails; the exit code reports the failure.
+	_, _ = fmt.Fprintf(w, "repoaudit: %v\n", err)
+
+	if errors.Is(err, errUsage) {
+		return 2
+	}
+
+	return 1
 }
 
 // audit parses every Go file under root and returns the findings, sorted by

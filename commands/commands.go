@@ -60,14 +60,13 @@ func (dirCatalogs) LoadCatalog(dir string) (int, error) {
 	return len(loaded.Species()), nil
 }
 
-// Options injects everything the command tree depends on. Version, Out and
-// ErrOut are required: there are no defaults. Settings carries what the caller
+// Options injects everything the command tree depends on. Version and Output
+// are required: there are no defaults. Settings carries what the caller
 // supplied; each command checks the settings it needs. Catalogs replaces the
 // filesystem catalog loader and exists so tests can substitute it.
 type Options struct {
 	Version  string
-	Out      io.Writer
-	ErrOut   io.Writer
+	Output   io.Writer
 	Settings Settings
 	Catalogs catalogLoader
 }
@@ -78,10 +77,8 @@ func New(opts Options) (*cli.Command, error) {
 	switch {
 	case opts.Version == "":
 		return nil, fmt.Errorf("building command tree: version: %w", ErrMissingOption)
-	case opts.Out == nil:
-		return nil, fmt.Errorf("building command tree: out: %w", ErrMissingOption)
-	case opts.ErrOut == nil:
-		return nil, fmt.Errorf("building command tree: errOut: %w", ErrMissingOption)
+	case opts.Output == nil:
+		return nil, fmt.Errorf("building command tree: output: %w", ErrMissingOption)
 	}
 
 	catalogs := opts.Catalogs
@@ -90,10 +87,11 @@ func New(opts Options) (*cli.Command, error) {
 	}
 
 	return &cli.Command{
-		Name:      "screeny",
-		Usage:     "Validate, sync and serve the bird plate catalog",
-		Writer:    opts.Out,
-		ErrWriter: opts.ErrOut,
+		Name:   "screeny",
+		Usage:  "Validate, sync and serve the bird plate catalog",
+		Writer: opts.Output,
+		// The library must not print errors itself: main reports each one once.
+		ErrWriter: io.Discard,
 		// The caller owns printing and exit codes, so the library must neither
 		// print a returned error nor call os.Exit.
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},

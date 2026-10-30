@@ -157,8 +157,7 @@ func TestRun(t *testing.T) {
 		files      map[string]string
 		args       func(root string) []string
 		wantCode   int
-		wantStdout string
-		wantStderr string
+		wantReport string
 	}{
 		{
 			name:  "clean tree",
@@ -166,7 +165,7 @@ func TestRun(t *testing.T) {
 			args:  func(root string) []string { return []string{"-root", root} },
 		},
 		{
-			name:     "violation exits one",
+			name:     "findings exit one",
 			files:    map[string]string{"catalog/types.go": "package catalog\n\ntype T struct{}\n"},
 			args:     func(root string) []string { return []string{"-root", root} },
 			wantCode: 1,
@@ -176,7 +175,7 @@ func TestRun(t *testing.T) {
 			files:      map[string]string{},
 			args:       func(string) []string { return nil },
 			wantCode:   2,
-			wantStderr: "repoaudit: -root is required\n",
+			wantReport: "repoaudit: usage: -root is required\n",
 		},
 	}
 
@@ -186,19 +185,21 @@ func TestRun(t *testing.T) {
 
 			root := writeTree(t, tt.files)
 
-			var stdout, stderr bytes.Buffer
+			var output, errText bytes.Buffer
 
-			code := run(tt.args(root), &stdout, &stderr)
+			err := run(tt.args(root), &output)
+
+			code := report(&errText, err)
 			if code != tt.wantCode {
-				t.Fatalf("run() code = %d, want %d (stdout %q, stderr %q)", code, tt.wantCode, stdout.String(), stderr.String())
+				t.Fatalf("exit code = %d, want %d (output %q, reported %q)", code, tt.wantCode, output.String(), errText.String())
 			}
 
-			if tt.wantStderr != "" && stderr.String() != tt.wantStderr {
-				t.Fatalf("run() stderr = %q, want %q", stderr.String(), tt.wantStderr)
+			if tt.wantReport != "" && errText.String() != tt.wantReport {
+				t.Fatalf("reported error = %q, want %q", errText.String(), tt.wantReport)
 			}
 
-			if tt.wantCode == 1 && !strings.Contains(stdout.String(), kindTypeOnlyFile) {
-				t.Fatalf("run() stdout = %q, want it to report %s", stdout.String(), kindTypeOnlyFile)
+			if tt.wantCode == 1 && !strings.Contains(output.String(), kindTypeOnlyFile) {
+				t.Fatalf("output = %q, want it to report %s", output.String(), kindTypeOnlyFile)
 			}
 		})
 	}
