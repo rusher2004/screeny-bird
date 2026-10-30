@@ -20,7 +20,7 @@ var version string
 // configLoader supplies the service's settings from wherever they are kept: a
 // TOML file today, and any other source that can produce a config.Config.
 type configLoader interface {
-	Load(ctx context.Context) (config.Config, error)
+	Load() (config.Config, error)
 }
 
 func main() {
@@ -80,7 +80,7 @@ func execute(ctx context.Context, version string, loader configLoader, args []st
 	var settings commands.Settings
 
 	if loader != nil {
-		cfg, err := loader.Load(ctx)
+		cfg, err := loader.Load()
 		if err != nil {
 			return report(stderr, fmt.Errorf("loading config: %w", err))
 		}

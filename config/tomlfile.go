@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,7 +22,7 @@ type TOMLFile struct {
 }
 
 // Load reads, strictly decodes and validates the file.
-func (f TOMLFile) Load(_ context.Context) (Config, error) {
+func (f TOMLFile) Load() (Config, error) {
 	info, err := fs.Stat(f.FS, f.Name)
 	if err != nil {
 		return Config{}, fmt.Errorf("reading config file %q: %w", f.Name, err)

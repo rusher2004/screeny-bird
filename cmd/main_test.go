@@ -19,7 +19,7 @@ type fakeLoader struct {
 	calls int
 }
 
-func (f *fakeLoader) Load(context.Context) (config.Config, error) {
+func (f *fakeLoader) Load() (config.Config, error) {
 	f.calls++
 
 	return f.cfg, f.err

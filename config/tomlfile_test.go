@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -17,7 +16,7 @@ func load(t *testing.T, content string) (config.Config, error) {
 
 	fsys := fstest.MapFS{"screeny.toml": &fstest.MapFile{Data: []byte(content)}}
 
-	return config.TOMLFile{FS: fsys, Name: "screeny.toml"}.Load(context.Background())
+	return config.TOMLFile{FS: fsys, Name: "screeny.toml"}.Load()
 }
 
 func TestLoadReadsEverySetting(t *testing.T) {
@@ -97,7 +96,7 @@ func TestLoadNamesTheUnknownKey(t *testing.T) {
 func TestLoadReportsAMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := config.TOMLFile{FS: fstest.MapFS{}, Name: "absent.toml"}.Load(context.Background())
+	_, err := config.TOMLFile{FS: fstest.MapFS{}, Name: "absent.toml"}.Load()
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Load() error = %v, want fs.ErrNotExist", err)
 	}
@@ -111,7 +110,7 @@ func TestLoadReportsAMissingFile(t *testing.T) {
 func TestExampleConfigLoads(t *testing.T) {
 	t.Parallel()
 
-	if _, err := (config.TOMLFile{FS: os.DirFS(".."), Name: "config.example.toml"}).Load(context.Background()); err != nil {
+	if _, err := (config.TOMLFile{FS: os.DirFS(".."), Name: "config.example.toml"}).Load(); err != nil {
 		t.Fatalf("Load(config.example.toml) error = %v", err)
 	}
 }
