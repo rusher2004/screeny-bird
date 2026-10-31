@@ -1,7 +1,8 @@
 // Package mirror keeps a local catalog in step with an upstream one. A sync
 // only ever adds species the local store lacks: a species the store already
 // holds is never replaced, and a sync that finds one changed upstream stops and
-// reports it.
+// reports it. Downloads are staged per upstream commit and verified, so a sync
+// that fails partway resumes from what it already has instead of starting over.
 package mirror
 
 import (
@@ -35,6 +36,12 @@ const (
 	portraitFile    = "portrait.png"
 	displayFile     = "display.png"
 	schemaVersion   = 1
+
+	// stagePrefix names the staging directories in the work directory; the
+	// commit being synced follows it.
+	stagePrefix = "stage-"
+	// partialSuffix marks a species download that has not finished.
+	partialSuffix = ".partial"
 )
 
 var (
@@ -48,11 +55,15 @@ var (
 	// ErrAssetMismatch reports a downloaded file whose SHA-256 differs from the
 	// upstream index.
 	ErrAssetMismatch = errors.New("downloaded file does not match the upstream index")
+	// ErrInvalidCommit reports an upstream ref that did not resolve to a full
+	// commit SHA, which staging directories are named after.
+	ErrInvalidCommit = errors.New("invalid upstream commit")
 )
 
 var (
 	slugPattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 	requiredFiles = []string{manifestFile, portraitFile, displayFile}
 	optionalFiles = []string{"profile.json", "quality-review.json"}
@@ -64,9 +75,23 @@ type source interface {
 	Fetch(ctx context.Context, commit, filePath string) ([]byte, error)
 }
 
+// progress is told how a sync is going, so whoever runs it can show progress.
+// The syncer itself never logs.
+type progress interface {
+	Resolved(commit string)
+	// Planned reports how many species upstream has and how many the store lacks.
+	Planned(upstream, missing int)
+	// Staged reports that done of total species are staged; reused says the
+	// species was already staged and verified by an earlier run.
+	Staged(done, total int, species string, reused bool)
+	Validating()
+	Publishing()
+}
+
 // Syncer adds the species an upstream catalog has and a local store lacks.
 type Syncer struct {
 	src      source
+	progress progress
 	repo     string
 	ref      string
 	storeDir string
@@ -77,7 +102,7 @@ type Syncer struct {
 // repo and ref only label the provenance record. workDir holds staging and
 // state, and must be on the same filesystem as storeDir so publishing is a
 // rename. Every argument is required, and all problems are reported together.
-func NewSyncer(src source, repo, ref, storeDir, workDir string) (Syncer, error) {
+func NewSyncer(src source, progress progress, repo, ref, storeDir, workDir string) (Syncer, error) {
 	var problems []error
 
 	for _, arg := range []struct {
@@ -85,6 +110,7 @@ func NewSyncer(src source, repo, ref, storeDir, workDir string) (Syncer, error) 
 		blank bool
 	}{
 		{"source", src == nil},
+		{"progress", progress == nil},
 		{"repo", strings.TrimSpace(repo) == ""},
 		{"ref", strings.TrimSpace(ref) == ""},
 		{"store directory", strings.TrimSpace(storeDir) == ""},
@@ -99,7 +125,7 @@ func NewSyncer(src source, repo, ref, storeDir, workDir string) (Syncer, error) 
 		return Syncer{}, fmt.Errorf("creating syncer: %w: %w", ErrInvalidSyncer, err)
 	}
 
-	return Syncer{src: src, repo: repo, ref: ref, storeDir: storeDir, workDir: workDir}, nil
+	return Syncer{src: src, progress: progress, repo: repo, ref: ref, storeDir: storeDir, workDir: workDir}, nil
 }
 
 // entry is one species in the upstream index.
@@ -153,6 +179,16 @@ func (s Syncer) Sync(ctx context.Context) (commit string, added int, err error) 
 		return "", 0, fmt.Errorf("resolving the upstream ref: %w", err)
 	}
 
+	if !commitPattern.MatchString(commit) {
+		return "", 0, fmt.Errorf("the upstream ref resolved to %q: %w", commit, ErrInvalidCommit)
+	}
+
+	s.progress.Resolved(commit)
+
+	if err := s.removeOtherStaging(commit); err != nil {
+		return "", 0, err
+	}
+
 	entries, err := s.fetchIndex(ctx, commit)
 	if err != nil {
 		return "", 0, err
@@ -162,6 +198,8 @@ func (s Syncer) Sync(ctx context.Context) (commit string, added int, err error) 
 	if err != nil {
 		return "", 0, err
 	}
+
+	s.progress.Planned(len(entries), len(missing))
 
 	if len(missing) > 0 {
 		if err := s.addSpecies(ctx, commit, missing); err != nil {
@@ -326,38 +364,174 @@ func (s Syncer) differsFromStore(e entry) (bool, error) {
 	return stored.Assets["portrait"].SHA256 != e.PortraitSHA256 || stored.Assets["display"].SHA256 != e.DisplaySHA256, nil
 }
 
-// addSpecies downloads, validates and publishes the missing species.
-func (s Syncer) addSpecies(ctx context.Context, commit string, missing []entry) (err error) {
-	stage, err := os.MkdirTemp(s.workDir, "stage-")
+// stageDir is where one commit's downloads wait between runs.
+func (s Syncer) stageDir(commit string) string {
+	return filepath.Join(s.workDir, stagePrefix+commit)
+}
+
+// removeOtherStaging deletes the staging of every other commit, so old attempts
+// never pile up. Staging for the commit being synced is kept: it holds the
+// verified downloads a retry resumes from.
+func (s Syncer) removeOtherStaging(commit string) error {
+	entries, err := os.ReadDir(s.workDir)
 	if err != nil {
+		return fmt.Errorf("reading the work directory %s: %w", s.workDir, err)
+	}
+
+	var errs []error
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, stagePrefix) || name == stagePrefix+commit {
+			continue
+		}
+
+		if err := os.RemoveAll(filepath.Join(s.workDir, name)); err != nil {
+			errs = append(errs, fmt.Errorf("removing stale staging %s: %w", name, err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// addSpecies stages, validates and publishes the missing species. A failure
+// keeps the species already staged and verified, so the next run resumes from
+// them. Only a successful publish removes the staging.
+func (s Syncer) addSpecies(ctx context.Context, commit string, missing []entry) error {
+	stage := s.stageDir(commit)
+	speciesRoot := filepath.Join(stage, "species")
+
+	if err := os.MkdirAll(speciesRoot, 0o755); err != nil {
 		return fmt.Errorf("creating the staging directory: %w", err)
 	}
 
-	defer func() {
-		if removeErr := os.RemoveAll(stage); removeErr != nil {
-			err = errors.Join(err, fmt.Errorf("removing staging directory %s: %w", stage, removeErr))
-		}
-	}()
+	if err := dropUnwantedStaging(speciesRoot, missing); err != nil {
+		return err
+	}
 
-	for _, e := range missing {
-		if err := s.download(ctx, commit, stage, e); err != nil {
+	for i, e := range missing {
+		reused, err := s.stageSpecies(ctx, commit, speciesRoot, e)
+		if err != nil {
 			return err
 		}
+
+		s.progress.Staged(i+1, len(missing), e.dir(), reused)
 	}
+
+	s.progress.Validating()
 
 	if err := validateStage(stage, missing); err != nil {
 		return err
 	}
 
-	return s.publish(stage, missing)
+	s.progress.Publishing()
+
+	if err := s.publish(stage, missing); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(stage); err != nil {
+		return fmt.Errorf("the catalog was updated, but removing the staging directory %s failed: %w", stage, err)
+	}
+
+	return nil
 }
 
-func (s Syncer) download(ctx context.Context, commit, stage string, e entry) error {
+// dropUnwantedStaging removes staged entries that are not a species this run
+// needs: unfinished downloads, and species the store has gained since.
+func dropUnwantedStaging(speciesRoot string, missing []entry) error {
+	wanted := make(map[string]bool, len(missing))
+	for _, e := range missing {
+		wanted[e.dir()] = true
+	}
+
+	entries, err := os.ReadDir(speciesRoot)
+	if err != nil {
+		return fmt.Errorf("reading the staged species: %w", err)
+	}
+
+	var errs []error
+
+	for _, entry := range entries {
+		if wanted[entry.Name()] {
+			continue
+		}
+
+		if err := os.RemoveAll(filepath.Join(speciesRoot, entry.Name())); err != nil {
+			errs = append(errs, fmt.Errorf("removing unneeded staged %s: %w", entry.Name(), err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// stageSpecies makes sure one species is staged and verified. A species staged
+// by an earlier run is reused if its files still match the upstream index;
+// otherwise it is downloaded again into an unfinished directory that becomes
+// the species only once every file is written. It reports whether the staged
+// copy was reused.
+func (s Syncer) stageSpecies(ctx context.Context, commit, speciesRoot string, e entry) (reused bool, err error) {
+	final := filepath.Join(speciesRoot, e.dir())
+
+	_, statErr := os.Stat(final)
+
+	switch {
+	case statErr == nil:
+		if verifyStaged(final, e) == nil {
+			return true, nil
+		}
+
+		if err := os.RemoveAll(final); err != nil {
+			return false, fmt.Errorf("removing the stale staged %s: %w", e.dir(), err)
+		}
+	case !errors.Is(statErr, fs.ErrNotExist):
+		return false, fmt.Errorf("inspecting the staged %s: %w", e.dir(), statErr)
+	}
+
+	partial := final + partialSuffix
+
+	if err := os.RemoveAll(partial); err != nil {
+		return false, fmt.Errorf("removing the unfinished download of %s: %w", e.dir(), err)
+	}
+
+	if err := s.download(ctx, commit, partial, e); err != nil {
+		return false, errors.Join(err, os.RemoveAll(partial))
+	}
+
+	if err := os.Rename(partial, final); err != nil {
+		return false, fmt.Errorf("finishing the download of %s: %w", e.dir(), err)
+	}
+
+	return false, nil
+}
+
+// verifyStaged reports whether a staged species still has its manifest and
+// both images, and the images still match the upstream index.
+func verifyStaged(dir string, e entry) error {
+	if _, err := os.Stat(filepath.Join(dir, manifestFile)); err != nil {
+		return fmt.Errorf("staged manifest: %w", err)
+	}
+
+	for name, want := range map[string]string{portraitFile: e.PortraitSHA256, displayFile: e.DisplaySHA256} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return fmt.Errorf("staged %s: %w", name, err)
+		}
+
+		if got := sha256Hex(data); got != want {
+			return fmt.Errorf("staged %s has SHA-256 %s, the index says %s: %w", name, got, want, ErrAssetMismatch)
+		}
+	}
+
+	return nil
+}
+
+// download fetches one species' files into dir.
+func (s Syncer) download(ctx context.Context, commit, dir string, e entry) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("downloading %s: %w", e.dir(), err)
 	}
 
-	dir := filepath.Join(stage, "species", e.dir())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating staging directory for %s: %w", e.dir(), err)
 	}

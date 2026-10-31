@@ -30,6 +30,10 @@ var (
 	ErrNotFound = errors.New("not found upstream")
 	// ErrBadResponse reports an upstream response the service cannot trust or use.
 	ErrBadResponse = errors.New("unexpected upstream response")
+	// ErrTransient marks a failure that trying the same request again could
+	// fix: a network or timeout error, a failed body read, a rate limit or a
+	// server error. Callers decide whether and how often to retry.
+	ErrTransient = errors.New("transient upstream failure")
 )
 
 var (
@@ -145,7 +149,7 @@ func (s Source) get(ctx context.Context, url string, headers map[string]string) 
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("requesting %s: %w", url, err)
+		return nil, fmt.Errorf("requesting %s: %w", url, transient(ctx, err))
 	}
 
 	defer func() {
@@ -158,13 +162,19 @@ func (s Source) get(ctx context.Context, url string, headers map[string]string) 
 	case http.StatusOK:
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%s: %w", url, ErrNotFound)
+	case http.StatusTooManyRequests:
+		return nil, fmt.Errorf("%s answered %d: %w: %w", url, resp.StatusCode, ErrBadResponse, ErrTransient)
 	default:
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return nil, fmt.Errorf("%s answered %d: %w: %w", url, resp.StatusCode, ErrBadResponse, ErrTransient)
+		}
+
 		return nil, fmt.Errorf("%s answered %d: %w", url, resp.StatusCode, ErrBadResponse)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading response from %s: %w", url, err)
+		return nil, fmt.Errorf("reading response from %s: %w", url, transient(ctx, err))
 	}
 
 	if len(data) > maxBodyBytes {
@@ -172,4 +182,14 @@ func (s Source) get(ctx context.Context, url string, headers map[string]string) 
 	}
 
 	return data, nil
+}
+
+// transient marks err as worth retrying, unless the caller's own context ended:
+// a canceled or timed-out request is the caller's decision, not a fault.
+func transient(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", err, ErrTransient)
 }

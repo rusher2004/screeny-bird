@@ -220,10 +220,35 @@ func newDirs(t *testing.T) dirs {
 	return d
 }
 
+// recordingProgress keeps what a syncer reports, one line per event.
+type recordingProgress struct{ events []string }
+
+func (r *recordingProgress) Resolved(commit string) {
+	r.events = append(r.events, "resolved "+commit)
+}
+
+func (r *recordingProgress) Planned(upstream, missing int) {
+	r.events = append(r.events, fmt.Sprintf("planned %d %d", upstream, missing))
+}
+
+func (r *recordingProgress) Staged(done, total int, species string, reused bool) {
+	r.events = append(r.events, fmt.Sprintf("staged %d/%d %s reused=%t", done, total, species, reused))
+}
+
+func (r *recordingProgress) Validating() { r.events = append(r.events, "validating") }
+
+func (r *recordingProgress) Publishing() { r.events = append(r.events, "publishing") }
+
 func newSyncer(t *testing.T, source *fakeSource, d dirs) mirror.Syncer {
 	t.Helper()
 
-	syncer, err := mirror.NewSyncer(source, "veteranbv/inky-bird-frame", "main", d.store, d.work)
+	return newSyncerReporting(t, source, &recordingProgress{}, d)
+}
+
+func newSyncerReporting(t *testing.T, source *fakeSource, progress *recordingProgress, d dirs) mirror.Syncer {
+	t.Helper()
+
+	syncer, err := mirror.NewSyncer(source, progress, "veteranbv/inky-bird-frame", "main", d.store, d.work)
 	if err != nil {
 		t.Fatalf("NewSyncer() error = %v", err)
 	}
@@ -563,8 +588,8 @@ func TestSyncPublishesNothingWhenADownloadIsWrong(t *testing.T) {
 			}
 
 			for name := range readTree(t, d.work) {
-				if name != "upstream.json" && name != "sync.lock" {
-					t.Errorf("work directory kept %q after a failure", name)
+				if strings.Contains(name, ".partial") {
+					t.Errorf("work directory kept the unfinished download %q after a failure", name)
 				}
 			}
 		})
@@ -751,17 +776,275 @@ func TestSyncRefusesToRunTwiceAtOnce(t *testing.T) {
 func TestNewSyncerRequiresEveryArgument(t *testing.T) {
 	t.Parallel()
 
-	if _, err := mirror.NewSyncer(nil, "", "", "", ""); !errors.Is(err, mirror.ErrInvalidSyncer) {
+	if _, err := mirror.NewSyncer(nil, nil, "", "", "", ""); !errors.Is(err, mirror.ErrInvalidSyncer) {
 		t.Fatalf("NewSyncer() error = %v, want ErrInvalidSyncer", err)
 	} else {
-		for _, name := range []string{"source", "repo", "ref", "store", "work"} {
+		for _, name := range []string{"source", "progress", "repo", "ref", "store", "work"} {
 			if !strings.Contains(err.Error(), name) {
 				t.Errorf("error %q does not name %s", err, name)
 			}
 		}
 	}
 
-	if _, err := mirror.NewSyncer(&fakeSource{}, "a/b", "main", "/s", "/w"); err != nil {
+	if _, err := mirror.NewSyncer(&fakeSource{}, &recordingProgress{}, "a/b", "main", "/s", "/w"); err != nil {
 		t.Fatalf("NewSyncer() with every argument error = %v", err)
+	}
+}
+
+// stagedSpecies lists the complete species a failed sync left in staging.
+func stagedSpecies(t *testing.T, work string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Join(work, "stage-"+commit, "species"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		t.Fatalf("reading staging: %v", err)
+	}
+
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
+func speciesPath(f fixture, name string) string {
+	return path.Join("catalog", "species", f.dir(), name)
+}
+
+func (f *fakeSource) fetchedAny(prefix string) bool {
+	for _, p := range f.fetched {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func TestSyncResumesAfterAFailureWithoutRefetchingVerifiedSpecies(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch, bunting)
+	d := newDirs(t)
+
+	broken := speciesPath(bunting, "display.png")
+	saved := source.files[broken]
+	delete(source.files, broken)
+
+	if _, _, err := newSyncer(t, source, d).Sync(context.Background()); !errors.Is(err, upstream.ErrNotFound) {
+		t.Fatalf("first Sync() error = %v, want ErrNotFound", err)
+	}
+
+	if got := stagedSpecies(t, d.work); !slices.Equal(got, []string{wren.dir(), finch.dir()}) {
+		t.Fatalf("staging holds %v after the failure, want the two verified species", got)
+	}
+
+	if got := readTree(t, d.store); len(got) != 0 {
+		t.Fatalf("the store changed during a failed sync: %v", got)
+	}
+
+	source.files[broken] = saved
+	source.fetched = nil
+
+	if _, added, err := newSyncer(t, source, d).Sync(context.Background()); err != nil || added != 3 {
+		t.Fatalf("second Sync() = %d, %v; want 3 added", added, err)
+	}
+
+	for _, f := range []fixture{wren, finch} {
+		if source.fetchedAny(path.Join("catalog", "species", f.dir())) {
+			t.Errorf("the second sync refetched %s, which was already staged and verified", f.dir())
+		}
+	}
+
+	if !source.fetchedAny(path.Join("catalog", "species", bunting.dir())) {
+		t.Error("the second sync did not fetch the species that had failed")
+	}
+
+	if got := taxa(mustLoadStore(t, d.store)); !slices.Equal(got, []int{1001, 1002, 1003}) {
+		t.Fatalf("store holds taxa %v, want all three", got)
+	}
+
+	for name := range readTree(t, d.work) {
+		if name != "upstream.json" && name != "sync.lock" {
+			t.Errorf("work directory kept %q after a successful sync", name)
+		}
+	}
+}
+
+func TestSyncReportsEachStepAndWhichSpeciesWereReused(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch, bunting)
+	d := newDirs(t)
+
+	broken := speciesPath(bunting, "display.png")
+	saved := source.files[broken]
+	delete(source.files, broken)
+
+	first := &recordingProgress{}
+	if _, _, err := newSyncerReporting(t, source, first, d).Sync(context.Background()); err == nil {
+		t.Fatal("first Sync() error = nil, want failure")
+	}
+
+	wantFirst := []string{
+		"resolved " + commit,
+		"planned 3 3",
+		"staged 1/3 " + wren.dir() + " reused=false",
+		"staged 2/3 " + finch.dir() + " reused=false",
+	}
+	if !slices.Equal(first.events, wantFirst) {
+		t.Fatalf("first sync reported %q, want %q", first.events, wantFirst)
+	}
+
+	source.files[broken] = saved
+
+	second := &recordingProgress{}
+	if _, _, err := newSyncerReporting(t, source, second, d).Sync(context.Background()); err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+
+	wantSecond := []string{
+		"resolved " + commit,
+		"planned 3 3",
+		"staged 1/3 " + wren.dir() + " reused=true",
+		"staged 2/3 " + finch.dir() + " reused=true",
+		"staged 3/3 " + bunting.dir() + " reused=false",
+		"validating",
+		"publishing",
+	}
+	if !slices.Equal(second.events, wantSecond) {
+		t.Fatalf("second sync reported %q, want %q", second.events, wantSecond)
+	}
+}
+
+func TestSyncRefetchesAStagedSpeciesThatNoLongerMatches(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch)
+	d := newDirs(t)
+
+	broken := speciesPath(finch, "display.png")
+	saved := source.files[broken]
+	delete(source.files, broken)
+
+	if _, _, err := newSyncer(t, source, d).Sync(context.Background()); err == nil {
+		t.Fatal("first Sync() error = nil, want failure")
+	}
+
+	staged := filepath.Join(d.work, "stage-"+commit, "species", wren.dir(), "portrait.png")
+	if err := os.WriteFile(staged, []byte("corrupted on disk"), 0o644); err != nil {
+		t.Fatalf("corrupting staged file: %v", err)
+	}
+
+	source.files[broken] = saved
+	source.fetched = nil
+
+	if _, added, err := newSyncer(t, source, d).Sync(context.Background()); err != nil || added != 2 {
+		t.Fatalf("second Sync() = %d, %v; want 2 added", added, err)
+	}
+
+	if !source.fetchedAny(path.Join("catalog", "species", wren.dir())) {
+		t.Error("a staged species whose file no longer matches was not downloaded again")
+	}
+
+	mustLoadStore(t, d.store)
+}
+
+func TestSyncRemovesUnfinishedDownloadsAndStaleStaging(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch)
+	d := newDirs(t)
+
+	stage := filepath.Join(d.work, "stage-"+commit, "species")
+	staleCommit := filepath.Join(d.work, "stage-"+strings.Repeat("a", 40), "species", "9999-old")
+	legacy := filepath.Join(d.work, "stage-123456789")
+
+	for _, dir := range []string{filepath.Join(stage, finch.dir()+".partial"), staleCommit, legacy} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+
+		if err := os.WriteFile(filepath.Join(dir, "leftover"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("writing leftover: %v", err)
+		}
+	}
+
+	unrelated := filepath.Join(d.work, "notes.txt")
+	if err := os.WriteFile(unrelated, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("writing unrelated file: %v", err)
+	}
+
+	if _, added, err := newSyncer(t, source, d).Sync(context.Background()); err != nil || added != 2 {
+		t.Fatalf("Sync() = %d, %v; want 2 added", added, err)
+	}
+
+	left := readTree(t, d.work)
+	for name := range left {
+		if strings.HasPrefix(name, "stage-") {
+			t.Errorf("work directory kept staging %q", name)
+		}
+	}
+
+	if left["notes.txt"] != "keep me" {
+		t.Error("sync removed a file in the work directory that is not its staging")
+	}
+}
+
+func TestSyncDropsStagedSpeciesTheStoreNoLongerLacks(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch, bunting)
+	d := newDirs(t)
+
+	broken := speciesPath(bunting, "display.png")
+	saved := source.files[broken]
+	delete(source.files, broken)
+
+	if _, _, err := newSyncer(t, source, d).Sync(context.Background()); err == nil {
+		t.Fatal("first Sync() error = nil, want failure")
+	}
+
+	// Another sync, with its own work directory, adds the wren to the store.
+	other := dirs{store: d.store, work: filepath.Join(filepath.Dir(d.work), "other-work")}
+	if _, _, err := newSyncer(t, newUpstream(t, wren), other).Sync(context.Background()); err != nil {
+		t.Fatalf("other Sync() error = %v", err)
+	}
+
+	source.files[broken] = saved
+	source.fetched = nil
+
+	if _, added, err := newSyncer(t, source, d).Sync(context.Background()); err != nil || added != 2 {
+		t.Fatalf("Sync() = %d, %v; want 2 added (the wren is already in the store)", added, err)
+	}
+
+	if got := taxa(mustLoadStore(t, d.store)); !slices.Equal(got, []int{1001, 1002, 1003}) {
+		t.Fatalf("store holds taxa %v, want all three", got)
+	}
+}
+
+func TestSyncRejectsACommitThatIsNotAFullSHA(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []string{"main", "../../etc", "", "8bc988b", strings.ToUpper(commit)} {
+		source := newUpstream(t, wren)
+		source.commit = bad
+
+		d := newDirs(t)
+
+		if _, _, err := newSyncer(t, source, d).Sync(context.Background()); !errors.Is(err, mirror.ErrInvalidCommit) {
+			t.Errorf("Sync() with commit %q error = %v, want ErrInvalidCommit", bad, err)
+		}
+
+		if len(source.fetched) != 0 {
+			t.Errorf("fetched %v with the invalid commit %q", source.fetched, bad)
+		}
 	}
 }

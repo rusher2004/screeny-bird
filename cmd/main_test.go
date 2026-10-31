@@ -36,6 +36,8 @@ func validConfig(catalogDir string) config.Config {
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 5,
 
+		UpstreamAttempts:          3,
+		UpstreamRetryDelaySeconds: 1,
 		ListenAddress:             ":8080",
 		ReadHeaderTimeoutSeconds:  5,
 		WriteTimeoutSeconds:       5,
@@ -171,6 +173,8 @@ work_dir = %q
 upstream_repo = "a/b"
 upstream_ref = "main"
 upstream_timeout_seconds = 5
+upstream_attempts = 3
+upstream_retry_delay_seconds = 1
 listen_address = ":8080"
 read_header_timeout_seconds = 5
 write_timeout_seconds = 5
@@ -234,7 +238,7 @@ func TestReport(t *testing.T) {
 func TestNewSyncerBuildsFromAValidConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newSyncer(validConfig(t.TempDir())); err != nil {
+	if _, err := newSyncer(validConfig(t.TempDir()), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("newSyncer() error = %v", err)
 	}
 }
@@ -246,7 +250,20 @@ func TestNewSyncerRejectsAnInvalidUpstream(t *testing.T) {
 	cfg.UpstreamRepo = "not a repo"
 	cfg.UpstreamRef = ""
 
-	_, err := newSyncer(cfg)
+	_, err := newSyncer(cfg, slog.New(slog.DiscardHandler))
+	if !errors.Is(err, upstream.ErrInvalidSource) {
+		t.Fatalf("newSyncer() error = %v, want upstream.ErrInvalidSource", err)
+	}
+}
+
+func TestNewSyncerRejectsUnusableRetrySettings(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig(t.TempDir())
+	cfg.UpstreamAttempts = 0
+	cfg.UpstreamRetryDelaySeconds = 0
+
+	_, err := newSyncer(cfg, slog.New(slog.DiscardHandler))
 	if !errors.Is(err, upstream.ErrInvalidSource) {
 		t.Fatalf("newSyncer() error = %v, want upstream.ErrInvalidSource", err)
 	}
