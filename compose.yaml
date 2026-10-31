@@ -6,6 +6,7 @@
 #
 #   VERSION="$(cat VERSION)" docker compose up --build
 #   VERSION="$(cat VERSION)" docker compose run --rm sync
+#   VERSION="$(cat VERSION)" docker compose run --rm derive
 
 x-screeny: &screeny
   build:
@@ -33,6 +34,11 @@ services:
   sync:
     <<: *screeny
     command: ["catalog", "sync"]
+    profiles: ["tools"]
+
+  derive:
+    <<: *screeny
+    command: ["catalog", "derive"]
     profiles: ["tools"]
 
 volumes:

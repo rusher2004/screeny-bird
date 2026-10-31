@@ -32,6 +32,9 @@ func validConfig(catalogDir string) config.Config {
 	return config.Config{
 		CatalogDir:             catalogDir,
 		WorkDir:                filepath.Join(catalogDir, "..", "work"),
+		DerivedDir:             filepath.Join(catalogDir, "..", "derived"),
+		DeriveWidth:            320,
+		DeriveHeight:           180,
 		UpstreamRepo:           "veteranbv/inky-bird-frame",
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 5,
@@ -170,6 +173,9 @@ func TestExecuteLoadsTheRealTOMLFile(t *testing.T) {
 
 	content := fmt.Sprintf(`catalog_dir = %q
 work_dir = %q
+derived_dir = %q
+derive_width = 320
+derive_height = 180
 upstream_repo = "a/b"
 upstream_ref = "main"
 upstream_timeout_seconds = 5
@@ -182,7 +188,7 @@ shutdown_timeout_seconds = 5
 reload_interval_seconds = 5
 healthcheck_timeout_seconds = 5
 cors_allowed_origins = []
-`, writeEmptyCatalog(t), t.TempDir())
+`, writeEmptyCatalog(t), t.TempDir(), t.TempDir())
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}

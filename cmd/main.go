@@ -16,6 +16,7 @@ import (
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/commands"
 	"github.com/rusher2004/screeny-bird/config"
+	"github.com/rusher2004/screeny-bird/derive"
 	"github.com/rusher2004/screeny-bird/mirror"
 	"github.com/rusher2004/screeny-bird/upstream"
 )
@@ -74,6 +75,11 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 		return err
 	}
 
+	deriver, err := newDeriver(cfg, catalogs, logger)
+	if err != nil {
+		return err
+	}
+
 	srv, err := newServer(cfg, version, catalogs, logger)
 	if err != nil {
 		return err
@@ -88,6 +94,7 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 		Writer:   w,
 		Catalogs: catalogs,
 		Syncer:   syncer,
+		Deriver:  deriver,
 		Server:   srv,
 		Prober:   prober,
 		Version:  version,
@@ -136,6 +143,17 @@ func newSyncer(cfg config.Config, logger *slog.Logger) (mirror.Syncer, error) {
 	}
 
 	return syncer, nil
+}
+
+// newDeriver builds the deriver that writes the configured size of image from
+// the catalog loaded by catalogs.
+func newDeriver(cfg config.Config, catalogs catalog.DirLoader, logger *slog.Logger) (derive.Deriver, error) {
+	deriver, err := derive.NewDeriver(catalogs, deriveLogger{logger: logger}, cfg.DerivedDir, cfg.DeriveWidth, cfg.DeriveHeight)
+	if err != nil {
+		return derive.Deriver{}, fmt.Errorf("creating deriver: %w", err)
+	}
+
+	return deriver, nil
 }
 
 // report prints err to w once and returns the process exit code: 0 for no

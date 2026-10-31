@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -37,6 +38,12 @@ type Config struct {
 	UpstreamAttempts int `toml:"upstream_attempts"`
 	// UpstreamRetryDelaySeconds is the wait between those attempts.
 	UpstreamRetryDelaySeconds int `toml:"upstream_retry_delay_seconds"`
+	// DerivedDir is where `catalog derive` writes the screensaver-sized images.
+	// It must be outside CatalogDir, which holds only approved plates.
+	DerivedDir string `toml:"derived_dir"`
+	// DeriveWidth and DeriveHeight are the pixel size of each derived image.
+	DeriveWidth  int `toml:"derive_width"`
+	DeriveHeight int `toml:"derive_height"`
 	// ListenAddress is the host:port the HTTP server listens on, such as ":8080".
 	ListenAddress string `toml:"listen_address"`
 	// ReadHeaderTimeoutSeconds bounds how long a client may take to send request headers.
@@ -66,6 +73,7 @@ func (c Config) validate() error {
 	}{
 		{"catalog_dir", c.CatalogDir},
 		{"work_dir", c.WorkDir},
+		{"derived_dir", c.DerivedDir},
 		{"upstream_repo", c.UpstreamRepo},
 		{"upstream_ref", c.UpstreamRef},
 		{"listen_address", c.ListenAddress},
@@ -82,6 +90,8 @@ func (c Config) validate() error {
 		{"upstream_timeout_seconds", c.UpstreamTimeoutSeconds},
 		{"upstream_attempts", c.UpstreamAttempts},
 		{"upstream_retry_delay_seconds", c.UpstreamRetryDelaySeconds},
+		{"derive_width", c.DeriveWidth},
+		{"derive_height", c.DeriveHeight},
 		{"read_header_timeout_seconds", c.ReadHeaderTimeoutSeconds},
 		{"write_timeout_seconds", c.WriteTimeoutSeconds},
 		{"shutdown_timeout_seconds", c.ShutdownTimeoutSeconds},
@@ -93,6 +103,17 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("%s: %w", setting.name, ErrMissingSetting))
 		case setting.value < 0:
 			errs = append(errs, fmt.Errorf("%s: must be positive, got %d: %w", setting.name, setting.value, ErrInvalidConfig))
+		}
+	}
+
+	if strings.TrimSpace(c.CatalogDir) != "" && strings.TrimSpace(c.DerivedDir) != "" {
+		inside, err := isWithin(c.CatalogDir, c.DerivedDir)
+
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("derived_dir: %q and catalog_dir %q must both be absolute or both relative: %w: %w", c.DerivedDir, c.CatalogDir, ErrInvalidConfig, err))
+		case inside:
+			errs = append(errs, fmt.Errorf("derived_dir: %q must be outside catalog_dir %q: %w", c.DerivedDir, c.CatalogDir, ErrInvalidConfig))
 		}
 	}
 
@@ -113,6 +134,18 @@ func (c Config) validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// isWithin reports whether path is parent or inside it, comparing cleaned
+// paths without touching the filesystem, so it cannot see through symlinks. It
+// fails when the two cannot be compared, such as one absolute and one relative.
+func isWithin(parent, path string) (bool, error) {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(path))
+	if err != nil {
+		return false, fmt.Errorf("comparing %q with %q: %w", path, parent, err)
+	}
+
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
 func checkListenAddress(address string) error {

@@ -41,6 +41,12 @@ type catalogSyncer interface {
 	Sync(ctx context.Context) (commit string, added int, err error)
 }
 
+// catalogDeriver is what the derive command needs: build the screensaver-sized
+// images the catalog lacks and say how many it made.
+type catalogDeriver interface {
+	Derive(ctx context.Context) (added int, err error)
+}
+
 // catalogServer is what the serve command needs: serve until ctx is done.
 type catalogServer interface {
 	Serve(ctx context.Context) error
@@ -57,6 +63,7 @@ type Options struct {
 	Writer   io.Writer
 	Catalogs catalogLoader
 	Syncer   catalogSyncer
+	Deriver  catalogDeriver
 	Server   catalogServer
 	Prober   healthProber
 	// Version is what the version command prints.
@@ -79,6 +86,10 @@ func New(opts Options) (*cli.Command, error) {
 
 	if opts.Syncer == nil {
 		missing = append(missing, fmt.Errorf("syncer: %w", ErrMissingOption))
+	}
+
+	if opts.Deriver == nil {
+		missing = append(missing, fmt.Errorf("deriver: %w", ErrMissingOption))
 	}
 
 	if opts.Server == nil {
@@ -138,6 +149,22 @@ func New(opts Options) (*cli.Command, error) {
 
 							if _, err := fmt.Fprintf(opts.Writer, "synced %d new species from %s\n", added, commit); err != nil {
 								return fmt.Errorf("writing sync result: %w", err)
+							}
+
+							return nil
+						},
+					},
+					{
+						Name:  "derive",
+						Usage: "Build screensaver-sized images for the species that lack one",
+						Action: func(ctx context.Context, _ *cli.Command) error {
+							added, err := opts.Deriver.Derive(ctx)
+							if err != nil {
+								return fmt.Errorf("deriving images: %w", err)
+							}
+
+							if _, err := fmt.Fprintf(opts.Writer, "derived %d new images\n", added); err != nil {
+								return fmt.Errorf("writing derive result: %w", err)
 							}
 
 							return nil

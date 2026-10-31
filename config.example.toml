@@ -8,6 +8,13 @@ catalog_dir = "/data/catalog"
 # Scratch space for catalog sync, on the same filesystem as catalog_dir.
 work_dir = "/data/work"
 
+# Where catalog derive writes the screensaver-sized images, outside catalog_dir,
+# and the pixel size of each one. Derived images are never replaced, so changing
+# the size means removing derived_dir first.
+derived_dir = "/data/derived"
+derive_width = 3840
+derive_height = 2160
+
 # GitHub repository (owner/name) and ref that catalog sync follows.
 upstream_repo = "veteranbv/inky-bird-frame"
 upstream_ref = "main"

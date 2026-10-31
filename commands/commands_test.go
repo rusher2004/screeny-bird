@@ -47,6 +47,18 @@ func (f *fakeSyncer) Sync(context.Context) (string, int, error) {
 	return f.commit, f.added, f.err
 }
 
+type fakeDeriver struct {
+	calls int
+	added int
+	err   error
+}
+
+func (f *fakeDeriver) Derive(context.Context) (int, error) {
+	f.calls++
+
+	return f.added, f.err
+}
+
 type fakeServer struct {
 	calls int
 	err   error
@@ -76,7 +88,7 @@ func run(t *testing.T, catalogs catalogLoader, args ...string) (output string, e
 
 	var buf bytes.Buffer
 
-	return runWith(t, commands.Options{Writer: &buf, Catalogs: catalogs, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}, &buf, args...)
+	return runWith(t, commands.Options{Writer: &buf, Catalogs: catalogs, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}, &buf, args...)
 }
 
 func runWith(t *testing.T, opts commands.Options, buf *bytes.Buffer, args ...string) (output string, err error) {
@@ -97,12 +109,13 @@ func TestNewRequiresEveryDependency(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	tests := map[string]func(commands.Options) commands.Options{
 		"writer":   func(o commands.Options) commands.Options { o.Writer = nil; return o },
 		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
 		"syncer":   func(o commands.Options) commands.Options { o.Syncer = nil; return o },
+		"deriver":  func(o commands.Options) commands.Options { o.Deriver = nil; return o },
 		"server":   func(o commands.Options) commands.Options { o.Server = nil; return o },
 		"prober":   func(o commands.Options) commands.Options { o.Prober = nil; return o },
 		"version":  func(o commands.Options) commands.Options { o.Version = "  "; return o },
@@ -136,7 +149,7 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"writer", "catalogs", "syncer", "server", "prober", "version"} {
+	for _, name := range []string{"writer", "catalogs", "syncer", "deriver", "server", "prober", "version"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -266,7 +279,7 @@ func TestCatalogSyncReportsWhatItAdded(t *testing.T) {
 	var buf bytes.Buffer
 
 	syncer := &fakeSyncer{commit: "8bc988b239d7ffb7d7394b1e5ad174b90f18ae1e", added: 3}
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: syncer, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: syncer, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	output, err := runWith(t, opts, &buf, "catalog", "sync")
 	if err != nil {
@@ -288,7 +301,7 @@ func TestCatalogSyncWrapsAFailureAndPrintsNothing(t *testing.T) {
 	var buf bytes.Buffer
 
 	cause := errors.New("upstream changed")
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{err: cause}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{err: cause}, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	output, err := runWith(t, opts, &buf, "catalog", "sync")
 	if !errors.Is(err, cause) {
@@ -300,13 +313,41 @@ func TestCatalogSyncWrapsAFailureAndPrintsNothing(t *testing.T) {
 	}
 }
 
+func TestCatalogDeriveReportsWhatItMade(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	deriver := &fakeDeriver{added: 4}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: deriver, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+
+	output, err := runWith(t, opts, &buf, "catalog", "derive")
+	if err != nil || output != "derived 4 new images\n" || deriver.calls != 1 {
+		t.Fatalf("Run(catalog derive) = %q, %v after %d calls; want %q once", output, err, deriver.calls, "derived 4 new images\n")
+	}
+}
+
+func TestCatalogDeriveWrapsAFailureAndPrintsNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	cause := errors.New("size changed")
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{err: cause}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+
+	output, err := runWith(t, opts, &buf, "catalog", "derive")
+	if !errors.Is(err, cause) || output != "" {
+		t.Fatalf("Run(catalog derive) = %q, %v; want no output and an error wrapping %v", output, err, cause)
+	}
+}
+
 func TestServeRunsTheServerUntilItReturns(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 
 	srv := &fakeServer{}
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: srv, Prober: &fakeProber{}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: srv, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	if _, err := runWith(t, opts, &buf, "serve"); err != nil {
 		t.Fatalf("Run(serve) error = %v", err)
@@ -323,7 +364,7 @@ func TestServeWrapsAServerFailure(t *testing.T) {
 	var buf bytes.Buffer
 
 	cause := errors.New("address in use")
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{err: cause}, Prober: &fakeProber{}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: &fakeServer{err: cause}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	if _, err := runWith(t, opts, &buf, "serve"); !errors.Is(err, cause) {
 		t.Fatalf("Run(serve) error = %v, want it to wrap %v", err, cause)
@@ -335,7 +376,7 @@ func TestHealthcheckPrintsOkOnlyWhenHealthy(t *testing.T) {
 
 	var healthy bytes.Buffer
 
-	opts := commands.Options{Writer: &healthy, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &healthy, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	output, err := runWith(t, opts, &healthy, "healthcheck")
 	if err != nil || output != "ok\n" {
@@ -345,7 +386,7 @@ func TestHealthcheckPrintsOkOnlyWhenHealthy(t *testing.T) {
 	var sick bytes.Buffer
 
 	cause := errors.New("answered 503")
-	opts = commands.Options{Writer: &sick, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{err: cause}, Version: "1.2.3"}
+	opts = commands.Options{Writer: &sick, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Deriver: &fakeDeriver{}, Server: &fakeServer{}, Prober: &fakeProber{err: cause}, Version: "1.2.3"}
 
 	output, err = runWith(t, opts, &sick, "healthcheck")
 	if !errors.Is(err, cause) || output != "" {

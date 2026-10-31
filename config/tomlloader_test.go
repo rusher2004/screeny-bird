@@ -31,6 +31,9 @@ func load(t *testing.T, content string) (config.Config, error) {
 // complete is a config file with every setting; edit returns it with changes.
 const complete = `catalog_dir = "/data/catalog"
 work_dir = "/data/work"
+derived_dir = "/data/derived"
+derive_width = 3840
+derive_height = 2160
 upstream_repo = "veteranbv/inky-bird-frame"
 upstream_ref = "main"
 upstream_timeout_seconds = 30
@@ -46,7 +49,7 @@ cors_allowed_origins = ["https://app.example.test"]
 `
 
 var allSettings = []string{
-	"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds",
+	"catalog_dir", "work_dir", "derived_dir", "derive_width", "derive_height", "upstream_repo", "upstream_ref", "upstream_timeout_seconds",
 	"upstream_attempts", "upstream_retry_delay_seconds",
 	"listen_address", "read_header_timeout_seconds", "write_timeout_seconds", "shutdown_timeout_seconds",
 	"reload_interval_seconds", "healthcheck_timeout_seconds", "cors_allowed_origins",
@@ -63,6 +66,9 @@ func TestLoadReadsEverySetting(t *testing.T) {
 	want := config.Config{
 		CatalogDir:             "/data/catalog",
 		WorkDir:                "/data/work",
+		DerivedDir:             "/data/derived",
+		DeriveWidth:            3840,
+		DeriveHeight:           2160,
 		UpstreamRepo:           "veteranbv/inky-bird-frame",
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 30,
@@ -241,19 +247,24 @@ func TestLoadRejectsUnusableServerSettings(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct{ from, to, want string }{
-		"negative attempts":       {"upstream_attempts = 3", "upstream_attempts = -1", "upstream_attempts"},
-		"negative retry delay":    {"upstream_retry_delay_seconds = 5", "upstream_retry_delay_seconds = -1", "upstream_retry_delay_seconds"},
-		"negative write timeout":  {"write_timeout_seconds = 60", "write_timeout_seconds = -1", "write_timeout_seconds"},
-		"negative reload":         {"reload_interval_seconds = 60", "reload_interval_seconds = -1", "reload_interval_seconds"},
-		"listen without a port":   {`listen_address = ":8080"`, `listen_address = "localhost"`, "listen_address"},
-		"listen port not numeric": {`listen_address = ":http"`, `listen_address = ":http"`, "listen_address"},
-		"listen port too large":   {`listen_address = ":8080"`, `listen_address = ":70000"`, "listen_address"},
-		"wildcard origin":         {`["https://app.example.test"]`, `["*"]`, "cors_allowed_origins"},
-		"origin with a path":      {`["https://app.example.test"]`, `["https://app.example.test/x"]`, "cors_allowed_origins"},
-		"origin without scheme":   {`["https://app.example.test"]`, `["app.example.test"]`, "cors_allowed_origins"},
-		"origin with a wildcard":  {`["https://app.example.test"]`, `["https://*.example.test"]`, "cors_allowed_origins"},
-		"origin with credentials": {`["https://app.example.test"]`, `["https://user@app.example.test"]`, "cors_allowed_origins"},
-		"ftp origin":              {`["https://app.example.test"]`, `["ftp://app.example.test"]`, "cors_allowed_origins"},
+		"derived dir relative to an absolute catalog": {`derived_dir = "/data/derived"`, `derived_dir = "catalog/derived"`, "derived_dir"},
+		"negative derive width":                       {"derive_width = 3840", "derive_width = -1", "derive_width"},
+		"negative derive height":                      {"derive_height = 2160", "derive_height = -1", "derive_height"},
+		"derived dir is the catalog":                  {`derived_dir = "/data/derived"`, `derived_dir = "/data/catalog"`, "derived_dir"},
+		"derived dir inside catalog":                  {`derived_dir = "/data/derived"`, `derived_dir = "/data/catalog/derived"`, "derived_dir"},
+		"negative attempts":                           {"upstream_attempts = 3", "upstream_attempts = -1", "upstream_attempts"},
+		"negative retry delay":                        {"upstream_retry_delay_seconds = 5", "upstream_retry_delay_seconds = -1", "upstream_retry_delay_seconds"},
+		"negative write timeout":                      {"write_timeout_seconds = 60", "write_timeout_seconds = -1", "write_timeout_seconds"},
+		"negative reload":                             {"reload_interval_seconds = 60", "reload_interval_seconds = -1", "reload_interval_seconds"},
+		"listen without a port":                       {`listen_address = ":8080"`, `listen_address = "localhost"`, "listen_address"},
+		"listen port not numeric":                     {`listen_address = ":http"`, `listen_address = ":http"`, "listen_address"},
+		"listen port too large":                       {`listen_address = ":8080"`, `listen_address = ":70000"`, "listen_address"},
+		"wildcard origin":                             {`["https://app.example.test"]`, `["*"]`, "cors_allowed_origins"},
+		"origin with a path":                          {`["https://app.example.test"]`, `["https://app.example.test/x"]`, "cors_allowed_origins"},
+		"origin without scheme":                       {`["https://app.example.test"]`, `["app.example.test"]`, "cors_allowed_origins"},
+		"origin with a wildcard":                      {`["https://app.example.test"]`, `["https://*.example.test"]`, "cors_allowed_origins"},
+		"origin with credentials":                     {`["https://app.example.test"]`, `["https://user@app.example.test"]`, "cors_allowed_origins"},
+		"ftp origin":                                  {`["https://app.example.test"]`, `["ftp://app.example.test"]`, "cors_allowed_origins"},
 	}
 
 	for name, tt := range tests {
