@@ -147,6 +147,10 @@ type healthResponse struct {
 	Version     string `json:"version"`
 	Species     int    `json:"species"`
 	GeneratedAt string `json:"generated_at,omitempty"`
+	// PendingDerive counts catalog species not served yet because their
+	// derived image does not exist. Serving the rest is normal, so it does not
+	// make the server unhealthy.
+	PendingDerive int `json:"pending_derive,omitempty"`
 	// Reload is "failing" while the latest reload failed and an older, valid
 	// catalog is being served. Details are left out: they would reveal paths.
 	Reload string `json:"reload,omitempty"`
@@ -154,7 +158,7 @@ type healthResponse struct {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	snap := s.state.Load()
-	body := healthResponse{OK: true, Version: s.opts.Version, Species: snap.species, GeneratedAt: snap.generatedAt}
+	body := healthResponse{OK: true, Version: s.opts.Version, Species: snap.species, GeneratedAt: snap.generatedAt, PendingDerive: snap.pending}
 	status := http.StatusOK
 
 	if s.reloadFailing.Load() {

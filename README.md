@@ -28,7 +28,7 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 
 | Route | Response |
 | --- | --- |
-| `GET /healthz` | Liveness and the served catalog's size. `503` if the latest catalog reload failed while an older valid catalog is still being served. |
+| `GET /healthz` | Liveness, the number of species served, and `pending_derive` (species waiting for their derived image, omitted when none). `503` if the latest catalog reload failed while an older valid catalog is still being served. |
 | `GET /v1/catalog` | The species list: `schema_version`, `generated_at`, and per species its names, slug, approval time, the paths and SHA-256 of its portrait and display images, and its `derived` screensaver-sized image (`path`, `sha256`, `width`, `height`). |
 | `GET /v1/derived/<path>` | One derived screensaver-sized PNG named by a species' `derived.path`, sent only after its bytes match the recorded checksum. `?sha256=<digest>` works the same way as for assets. |
 | `GET /v1/assets/<path>` | One PNG listed in the catalog, sent only after its bytes match the catalog's checksum. Add `?sha256=<digest>` to make the response cacheable forever. |
@@ -96,7 +96,7 @@ curl localhost:8080/healthz
 curl localhost:8080/v1/catalog
 ```
 
-To pick up new upstream species later, run the sync command again, then derive. The server needs every species to have a derived image, so after a sync it keeps serving the old catalog and `/healthz` reports 503 until derive has run; it notices the finished derive within `reload_interval_seconds`. It also refuses to start until `catalog derive` has run once, and a restart in the window between sync and derive fails the same way, so a supervisor that restarts an unhealthy container will keep restarting it until derive finishes. Run derive straight after sync, for example in the same job. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
+To pick up new upstream species later, run the sync command again, then derive. The server serves only species that have a derived image, so after a sync the new species appear once derive has reached them, and `/healthz` shows how many are still waiting as `pending_derive` while staying healthy. It notices the finished derive within `reload_interval_seconds`. It refuses to start until `catalog derive` has run once, and if the derived images name a species the catalog lacks. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
 
 Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog derive`, `./screeny catalog validate` and `./screeny serve`.
 

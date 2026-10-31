@@ -585,7 +585,7 @@ func TestServeRefusesToStartOnAnInvalidCatalog(t *testing.T) {
 	}
 }
 
-func TestServeRefusesToStartWhenDeriveHasNotCaughtUp(t *testing.T) {
+func TestServeServesOnlySpeciesThatHaveADerivedImage(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, []string{}, wren)
@@ -593,19 +593,32 @@ func TestServeRefusesToStartWhenDeriveHasNotCaughtUp(t *testing.T) {
 	// The catalog gains a species that has no derived image yet.
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
+	h.start()
 
-	srv, err := server.New(h.opts)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
+	if got := h.catalogTaxa(); !slices.Equal(got, []int{1001}) {
+		t.Fatalf("taxa = %v, want only the species with a derived image [1001]", got)
 	}
 
-	err = srv.Serve(context.Background())
-	if !errors.Is(err, server.ErrDerivedMismatch) || !strings.Contains(err.Error(), finch) {
-		t.Fatalf("Serve() error = %v, want ErrDerivedMismatch naming %s", err, finch)
+	var health struct {
+		OK      bool `json:"ok"`
+		Species int  `json:"species"`
+		Pending int  `json:"pending_derive"`
 	}
 
-	if n := h.provider.calls.Load(); n != 0 {
-		t.Fatalf("Serve() opened the listener %d times, want 0", n)
+	resp := h.get("/healthz")
+	if err := json.Unmarshal(resp.body, &health); err != nil {
+		t.Fatalf("decoding health: %v", err)
+	}
+
+	if resp.status != http.StatusOK || !health.OK || health.Species != 1 || health.Pending != 1 {
+		t.Fatalf("health = %d %+v, want 200, ok, 1 species served and 1 pending derive", resp.status, health)
+	}
+
+	// The unserved species' images are not served either.
+	for _, path := range []string{"/v1/assets/species/" + finch + "/portrait.png", derivedURL(finch)} {
+		if resp := h.get(path); resp.status != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 until derive has reached the species", path, resp.status)
+		}
 	}
 }
 
@@ -682,23 +695,27 @@ func TestServeRefusesADerivedImageForASpeciesTheCatalogLacks(t *testing.T) {
 	}
 }
 
-func TestReloadWaitsForDeriveAndRecoversWhenItFinishes(t *testing.T) {
+func TestReloadServesNewSpeciesOnlyOnceDeriveHasReachedThem(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, []string{}, wren).start()
 
-	// Sync adds a species; derive has not run yet, so the reload fails and the
-	// last good catalog keeps being served.
+	// Sync adds a species; derive has not run yet. The reload succeeds and the
+	// server stays healthy, still serving only the first species.
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
 	h.ticker.fire()
 
-	eventually(t, "the reload to fail while derive is behind", func() bool {
-		return h.get("/healthz").status == http.StatusServiceUnavailable
+	eventually(t, "the pending species to be reported", func() bool {
+		return strings.Contains(string(h.get("/healthz").body), `"pending_derive":1`)
 	})
 
+	if resp := h.get("/healthz"); resp.status != http.StatusOK {
+		t.Fatalf("GET /healthz while derive is behind = %d, want 200", resp.status)
+	}
+
 	if got := h.catalogTaxa(); !slices.Equal(got, []int{1001}) {
-		t.Fatalf("taxa = %v while derive is behind, want the last good [1001]", got)
+		t.Fatalf("taxa = %v while derive is behind, want [1001]", got)
 	}
 
 	// Derive finishes without the catalog index changing: only the derived
@@ -706,8 +723,8 @@ func TestReloadWaitsForDeriveAndRecoversWhenItFinishes(t *testing.T) {
 	h.rederive()
 	h.ticker.fire()
 
-	eventually(t, "recovery once derive has caught up", func() bool {
-		return h.get("/healthz").status == http.StatusOK && slices.Equal(h.catalogTaxa(), []int{1001, 1002})
+	eventually(t, "the new species once derive has reached it", func() bool {
+		return slices.Equal(h.catalogTaxa(), []int{1001, 1002}) && !strings.Contains(string(h.get("/healthz").body), "pending_derive")
 	})
 }
 

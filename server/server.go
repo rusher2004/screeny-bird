@@ -29,8 +29,9 @@ const (
 	schemaVersion = 1
 )
 
-// ErrDerivedMismatch reports that the derived images and the catalog do not
-// describe the same species, so derive needs to run.
+// ErrDerivedMismatch reports that the derived images and the catalog disagree
+// about a species: a derived image for one the catalog lacks, or under another
+// slug.
 var ErrDerivedMismatch = errors.New("derived images do not match the catalog")
 
 // ErrInvalidServer reports a server built without a required option or with an
@@ -165,10 +166,14 @@ func New(opts Options) (*Server, error) {
 // snapshot is one validated catalog, ready to serve.
 type snapshot struct {
 	indexVersion string
-	species      int
-	generatedAt  string
-	catalogJSON  []byte
-	catalogETag  string
+	// species is how many species are served: those with a derived image.
+	species int
+	// pending is how many catalog species are not served yet because derive
+	// has not made their image.
+	pending     int
+	generatedAt string
+	catalogJSON []byte
+	catalogETag string
 	// assets maps each served asset path to the SHA-256 the catalog declares.
 	assets map[string]string
 	// derived maps each served derived image path to its recorded SHA-256.
@@ -207,23 +212,24 @@ type servedDerived struct {
 }
 
 // joinDerived pairs every catalog species with its derived image. A species
-// without one, or a derived image for a species the catalog lacks, means
-// derive has not caught up with the catalog, and every such mismatch is
-// reported.
-func joinDerived(species []catalog.Species, idx derive.Index) ([]servedSpecies, error) {
+// derive has not reached yet is left out and counted as pending, so it is
+// served as soon as its image exists. A derived image for a species the
+// catalog lacks, or under a different slug, means the two disagree about what
+// exists, and every such mismatch is reported.
+func joinDerived(species []catalog.Species, idx derive.Index) (served []servedSpecies, pending int, err error) {
 	byTaxon := make(map[int]derive.Entry, len(idx.Species))
 	for _, e := range idx.Species {
 		byTaxon[e.TaxonID] = e
 	}
 
-	served := make([]servedSpecies, 0, len(species))
+	served = make([]servedSpecies, 0, len(species))
 
 	var problems []error
 
 	for _, sp := range species {
 		e, ok := byTaxon[sp.TaxonID]
 		if !ok {
-			problems = append(problems, fmt.Errorf("species %d-%s has no derived image: %w", sp.TaxonID, sp.Slug, ErrDerivedMismatch))
+			pending++
 
 			continue
 		}
@@ -255,10 +261,10 @@ func joinDerived(species []catalog.Species, idx derive.Index) ([]servedSpecies, 
 	}
 
 	if err := errors.Join(problems...); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return served, nil
+	return served, pending, nil
 }
 
 // indexVersion is the token that changes when either index is replaced.
@@ -295,9 +301,7 @@ func (s *Server) load() (*snapshot, error) {
 		return nil, fmt.Errorf("loading the derived index: %w", err)
 	}
 
-	species := loaded.Species()
-
-	served, err := joinDerived(species, idx)
+	served, pending, err := joinDerived(loaded.Species(), idx)
 	if err != nil {
 		return nil, err
 	}
@@ -316,11 +320,12 @@ func (s *Server) load() (*snapshot, error) {
 	digest := sha256.Sum256(body)
 	snap := &snapshot{
 		indexVersion: version,
-		species:      len(species),
+		species:      len(served),
+		pending:      pending,
 		catalogJSON:  body,
 		catalogETag:  `"` + hex.EncodeToString(digest[:]) + `"`,
-		assets:       make(map[string]string, 2*len(species)),
-		derived:      make(map[string]string, len(species)),
+		assets:       make(map[string]string, 2*len(served)),
+		derived:      make(map[string]string, len(served)),
 	}
 
 	if response.GeneratedAt != nil {
