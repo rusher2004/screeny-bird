@@ -102,6 +102,17 @@ func (c *Catalog) Species() []Species {
 	return slices.Clone(c.species)
 }
 
+// GeneratedAt returns the latest approval time among the species, and false
+// for an empty catalog.
+func (c *Catalog) GeneratedAt() (string, bool) {
+	latest := indexOf(c.species).GeneratedAt
+	if latest == nil {
+		return "", false
+	}
+
+	return *latest, true
+}
+
 // load validates every part of the catalog rooted at fsys, including that
 // index.json matches the species, and returns it. When anything is wrong it
 // returns no catalog and an error joining every problem found, each species

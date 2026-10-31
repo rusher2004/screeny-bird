@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/commands"
@@ -31,24 +33,31 @@ type configLoader interface {
 }
 
 func main() {
-	err := run(context.Background(), version, os.Args, os.Stdout)
+	// main is the only code that touches signals: SIGINT and SIGTERM end the
+	// context the serve command runs under, which shuts the server down.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	err := run(ctx, version, logger, os.Args, os.Stdout)
+
+	stop()
 	os.Exit(report(os.Stderr, err))
 }
 
 // run loads the settings file main assumes and executes the command line,
 // writing command output to w.
-func run(ctx context.Context, version string, args []string, w io.Writer) error {
+func run(ctx context.Context, version string, logger *slog.Logger, args []string, w io.Writer) error {
 	loader, err := config.NewTOMLLoader(configPath)
 	if err != nil {
 		return fmt.Errorf("creating config loader: %w", err)
 	}
 
-	return execute(ctx, version, loader, args, w)
+	return execute(ctx, version, loader, logger, args, w)
 }
 
 // execute loads settings from loader, builds every dependency from them and
 // runs the command line, writing command output to w.
-func execute(ctx context.Context, version string, loader configLoader, args []string, w io.Writer) error {
+func execute(ctx context.Context, version string, loader configLoader, logger *slog.Logger, args []string, w io.Writer) error {
 	cfg, err := loader.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -64,7 +73,24 @@ func execute(ctx context.Context, version string, loader configLoader, args []st
 		return err
 	}
 
-	cmd, err := commands.New(commands.Options{Writer: w, Catalogs: catalogs, Syncer: syncer, Version: version})
+	srv, err := newServer(cfg, version, catalogs, logger)
+	if err != nil {
+		return err
+	}
+
+	prober, err := newProber(cfg)
+	if err != nil {
+		return err
+	}
+
+	cmd, err := commands.New(commands.Options{
+		Writer:   w,
+		Catalogs: catalogs,
+		Syncer:   syncer,
+		Server:   srv,
+		Prober:   prober,
+		Version:  version,
+	})
 	if err != nil {
 		return err
 	}
@@ -77,7 +103,7 @@ func execute(ctx context.Context, version string, loader configLoader, args []st
 // lookup, no redirects and the configured timeout, so nothing outside the
 // settings decides where a request goes.
 func newSyncer(cfg config.Config) (mirror.Syncer, error) {
-	timeout := time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second
+	timeout := seconds(cfg.UpstreamTimeoutSeconds)
 
 	client := &http.Client{
 		Timeout:   timeout,

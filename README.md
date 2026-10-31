@@ -19,9 +19,20 @@ A catalog of approved bird plates, one illustrated image and profile per species
 | `screeny catalog validate` | Check the catalog against its rules. | Done |
 | `screeny catalog sync` | Add the species the upstream catalog has and the local one lacks. | Done |
 | `screeny catalog derive` | Build screensaver-sized images. | Planned |
-| `screeny serve` | Serve the catalog and images. | Planned |
+| `screeny serve` | Serve the validated catalog and images over HTTP. | Done |
+| `screeny healthcheck` | Exit zero only if the running server is healthy. | Done |
 
 Choosing which plate appears next belongs to the screensaver apps, not this service.
+
+## HTTP API
+
+| Route | Response |
+| --- | --- |
+| `GET /healthz` | Liveness and the served catalog's size. `503` if the latest catalog reload failed while an older valid catalog is still being served. |
+| `GET /v1/catalog` | The species list: `schema_version`, `generated_at`, and per species its names, slug, approval time, and the paths and SHA-256 of its portrait and display images. |
+| `GET /v1/assets/<path>` | One PNG listed in the catalog, sent only after its bytes match the catalog's checksum. Add `?sha256=<digest>` to make the response cacheable forever. |
+
+Only `GET` and `HEAD` are accepted. Responses carry an `ETag` and answer `If-None-Match`. Browser access from another origin is off unless that exact origin is configured.
 
 ## Configuration
 
@@ -34,6 +45,13 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | `upstream_repo` | `catalog sync` | GitHub repository (`owner/name`) the catalog syncs from. |
 | `upstream_ref` | `catalog sync` | Branch or tag of that repository to follow. |
 | `upstream_timeout_seconds` | `catalog sync` | Seconds allowed for each request to the upstream repository. |
+| `listen_address` | `serve`, `healthcheck` | Address the HTTP server listens on, as `host:port`. |
+| `read_header_timeout_seconds` | `serve` | Seconds a client may take to send request headers. |
+| `write_timeout_seconds` | `serve` | Seconds allowed to write one response. |
+| `shutdown_timeout_seconds` | `serve` | Seconds in-flight requests get to finish on shutdown. |
+| `reload_interval_seconds` | `serve` | Seconds between checks for a changed catalog. |
+| `healthcheck_timeout_seconds` | `healthcheck` | Seconds allowed for the healthcheck request. |
+| `cors_allowed_origins` | `serve` | Browser origins allowed to read the catalog and images. An empty list allows none. |
 
 ## Packages
 
@@ -49,7 +67,7 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `derive` and `server` do not exist yet; they arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `derive` does not exist yet; it arrives with its command. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 

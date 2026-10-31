@@ -5,6 +5,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +32,21 @@ type Config struct {
 	UpstreamRef string `toml:"upstream_ref"`
 	// UpstreamTimeoutSeconds bounds each request to the upstream repository.
 	UpstreamTimeoutSeconds int `toml:"upstream_timeout_seconds"`
+	// ListenAddress is the host:port the HTTP server listens on, such as ":8080".
+	ListenAddress string `toml:"listen_address"`
+	// ReadHeaderTimeoutSeconds bounds how long a client may take to send request headers.
+	ReadHeaderTimeoutSeconds int `toml:"read_header_timeout_seconds"`
+	// WriteTimeoutSeconds bounds how long writing one response may take.
+	WriteTimeoutSeconds int `toml:"write_timeout_seconds"`
+	// ShutdownTimeoutSeconds bounds how long in-flight requests get to finish on shutdown.
+	ShutdownTimeoutSeconds int `toml:"shutdown_timeout_seconds"`
+	// ReloadIntervalSeconds is how often the server checks whether the catalog changed.
+	ReloadIntervalSeconds int `toml:"reload_interval_seconds"`
+	// HealthcheckTimeoutSeconds bounds the healthcheck command's request.
+	HealthcheckTimeoutSeconds int `toml:"healthcheck_timeout_seconds"`
+	// CORSAllowedOrigins lists the browser origins allowed to read the catalog
+	// and images, each as scheme://host[:port]. An empty list allows none.
+	CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
 }
 
 // validate reports every required setting that is missing, empty or unusable,
@@ -45,18 +63,79 @@ func (c Config) validate() error {
 		{"work_dir", c.WorkDir},
 		{"upstream_repo", c.UpstreamRepo},
 		{"upstream_ref", c.UpstreamRef},
+		{"listen_address", c.ListenAddress},
 	} {
 		if strings.TrimSpace(setting.value) == "" {
 			errs = append(errs, fmt.Errorf("%s: %w", setting.name, ErrMissingSetting))
 		}
 	}
 
-	switch {
-	case c.UpstreamTimeoutSeconds == 0:
-		errs = append(errs, fmt.Errorf("upstream_timeout_seconds: %w", ErrMissingSetting))
-	case c.UpstreamTimeoutSeconds < 0:
-		errs = append(errs, fmt.Errorf("upstream_timeout_seconds: must be positive, got %d: %w", c.UpstreamTimeoutSeconds, ErrInvalidConfig))
+	for _, setting := range []struct {
+		name  string
+		value int
+	}{
+		{"upstream_timeout_seconds", c.UpstreamTimeoutSeconds},
+		{"read_header_timeout_seconds", c.ReadHeaderTimeoutSeconds},
+		{"write_timeout_seconds", c.WriteTimeoutSeconds},
+		{"shutdown_timeout_seconds", c.ShutdownTimeoutSeconds},
+		{"reload_interval_seconds", c.ReloadIntervalSeconds},
+		{"healthcheck_timeout_seconds", c.HealthcheckTimeoutSeconds},
+	} {
+		switch {
+		case setting.value == 0:
+			errs = append(errs, fmt.Errorf("%s: %w", setting.name, ErrMissingSetting))
+		case setting.value < 0:
+			errs = append(errs, fmt.Errorf("%s: must be positive, got %d: %w", setting.name, setting.value, ErrInvalidConfig))
+		}
+	}
+
+	if strings.TrimSpace(c.ListenAddress) != "" {
+		if err := checkListenAddress(c.ListenAddress); err != nil {
+			errs = append(errs, fmt.Errorf("listen_address: %w: %w", ErrInvalidConfig, err))
+		}
+	}
+
+	if c.CORSAllowedOrigins == nil {
+		errs = append(errs, fmt.Errorf("cors_allowed_origins: %w", ErrMissingSetting))
+	}
+
+	for _, origin := range c.CORSAllowedOrigins {
+		if err := checkOrigin(origin); err != nil {
+			errs = append(errs, fmt.Errorf("cors_allowed_origins: %q: %w: %w", origin, ErrInvalidConfig, err))
+		}
 	}
 
 	return errors.Join(errs...)
+}
+
+func checkListenAddress(address string) error {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("must look like host:port: %w", err)
+	}
+
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("port %q is not a number from 0 to 65535", port)
+	}
+
+	return nil
+}
+
+// checkOrigin accepts only scheme://host[:port]: no wildcard, path, query,
+// fragment or credentials.
+func checkOrigin(origin string) error {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("not a URL: %w", err)
+	}
+
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.Contains(parsed.Host, "*") {
+		return errors.New("must be an http or https origin with a host")
+	}
+
+	if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return errors.New("must be only scheme://host[:port]")
+	}
+
+	return nil
 }

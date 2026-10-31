@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,7 +35,25 @@ func validConfig(catalogDir string) config.Config {
 		UpstreamRepo:           "veteranbv/inky-bird-frame",
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 5,
+
+		ListenAddress:             ":8080",
+		ReadHeaderTimeoutSeconds:  5,
+		WriteTimeoutSeconds:       5,
+		ShutdownTimeoutSeconds:    5,
+		ReloadIntervalSeconds:     5,
+		HealthcheckTimeoutSeconds: 5,
+		CORSAllowedOrigins:        []string{},
 	}
+}
+
+// blankCatalogDir returns a valid config except that its catalog directory is blank.
+func blankCatalogDir(t *testing.T, catalogDir string) config.Config {
+	t.Helper()
+
+	cfg := validConfig(catalogDir)
+	cfg.CatalogDir = " "
+
+	return cfg
 }
 
 // writeEmptyCatalog creates a valid catalog with no species and returns its directory.
@@ -87,7 +106,7 @@ func TestExecuteAndReport(t *testing.T) {
 		{
 			name:       "a blank catalog directory fails while building the loader",
 			version:    "1.2.3",
-			loader:     &fakeLoader{cfg: config.Config{CatalogDir: " ", WorkDir: "w", UpstreamRepo: "a/b", UpstreamRef: "main", UpstreamTimeoutSeconds: 5}},
+			loader:     &fakeLoader{cfg: blankCatalogDir(t, catalogDir)},
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
 			wantReport: "screeny: creating catalog loader: creating directory loader: catalog directory is required\n",
@@ -112,7 +131,7 @@ func TestExecuteAndReport(t *testing.T) {
 			loader:     &fakeLoader{cfg: loaded},
 			args:       []string{"screeny", "version"},
 			wantCode:   1,
-			wantReport: "screeny: building command tree: version: missing required option\n",
+			wantReport: "screeny: wiring the HTTP server: creating server: invalid server: version is required\n",
 		},
 	}
 
@@ -122,7 +141,7 @@ func TestExecuteAndReport(t *testing.T) {
 
 			var output, errText bytes.Buffer
 
-			err := execute(context.Background(), tt.version, tt.loader, tt.args, &output)
+			err := execute(context.Background(), tt.version, tt.loader, slog.New(slog.DiscardHandler), tt.args, &output)
 			if code := report(&errText, err); code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
 			}
@@ -147,8 +166,19 @@ func TestExecuteLoadsTheRealTOMLFile(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "screeny.toml")
 
-	content := fmt.Sprintf("catalog_dir = %q\nwork_dir = %q\nupstream_repo = \"a/b\"\nupstream_ref = \"main\"\nupstream_timeout_seconds = 5\n",
-		writeEmptyCatalog(t), t.TempDir())
+	content := fmt.Sprintf(`catalog_dir = %q
+work_dir = %q
+upstream_repo = "a/b"
+upstream_ref = "main"
+upstream_timeout_seconds = 5
+listen_address = ":8080"
+read_header_timeout_seconds = 5
+write_timeout_seconds = 5
+shutdown_timeout_seconds = 5
+reload_interval_seconds = 5
+healthcheck_timeout_seconds = 5
+cors_allowed_origins = []
+`, writeEmptyCatalog(t), t.TempDir())
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
@@ -160,7 +190,7 @@ func TestExecuteLoadsTheRealTOMLFile(t *testing.T) {
 
 	var output bytes.Buffer
 
-	if err := execute(context.Background(), "1.2.3", loader, []string{"screeny", "catalog", "validate"}, &output); err != nil || output.String() != "validated 0 species\n" {
+	if err := execute(context.Background(), "1.2.3", loader, slog.New(slog.DiscardHandler), []string{"screeny", "catalog", "validate"}, &output); err != nil || output.String() != "validated 0 species\n" {
 		t.Fatalf("execute() = %q, %v; want %q and no error", output.String(), err, "validated 0 species\n")
 	}
 }

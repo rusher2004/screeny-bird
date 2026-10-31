@@ -41,11 +41,24 @@ type catalogSyncer interface {
 	Sync(ctx context.Context) (commit string, added int, err error)
 }
 
+// catalogServer is what the serve command needs: serve until ctx is done.
+type catalogServer interface {
+	Serve(ctx context.Context) error
+}
+
+// healthProber is what the healthcheck command needs: report whether a running
+// server is healthy.
+type healthProber interface {
+	Probe(ctx context.Context) error
+}
+
 // Options is everything the command tree depends on. Every field is required.
 type Options struct {
 	Writer   io.Writer
 	Catalogs catalogLoader
 	Syncer   catalogSyncer
+	Server   catalogServer
+	Prober   healthProber
 	// Version is what the version command prints.
 	Version string
 }
@@ -66,6 +79,14 @@ func New(opts Options) (*cli.Command, error) {
 
 	if opts.Syncer == nil {
 		missing = append(missing, fmt.Errorf("syncer: %w", ErrMissingOption))
+	}
+
+	if opts.Server == nil {
+		missing = append(missing, fmt.Errorf("server: %w", ErrMissingOption))
+	}
+
+	if opts.Prober == nil {
+		missing = append(missing, fmt.Errorf("prober: %w", ErrMissingOption))
 	}
 
 	if strings.TrimSpace(opts.Version) == "" {
@@ -138,6 +159,32 @@ func New(opts Options) (*cli.Command, error) {
 							return nil
 						},
 					},
+				},
+			},
+			{
+				Name:  "serve",
+				Usage: "Serve the validated catalog and its images over HTTP",
+				Action: func(ctx context.Context, _ *cli.Command) error {
+					if err := opts.Server.Serve(ctx); err != nil {
+						return fmt.Errorf("serving: %w", err)
+					}
+
+					return nil
+				},
+			},
+			{
+				Name:  "healthcheck",
+				Usage: "Exit zero only if the running server reports healthy",
+				Action: func(ctx context.Context, _ *cli.Command) error {
+					if err := opts.Prober.Probe(ctx); err != nil {
+						return fmt.Errorf("healthcheck: %w", err)
+					}
+
+					if _, err := fmt.Fprintln(opts.Writer, "ok"); err != nil {
+						return fmt.Errorf("writing healthcheck result: %w", err)
+					}
+
+					return nil
 				},
 			},
 			{

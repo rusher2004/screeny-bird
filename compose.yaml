@@ -1,0 +1,39 @@
+# Development stack, running the same image as production.
+#
+# Nothing here has a default: the version must be given, and the settings file
+# is mounted explicitly. Copy config.example.toml to config.local.toml first
+# (it is gitignored); its listen_address must match the published port below.
+#
+#   VERSION="$(cat VERSION)" docker compose up --build
+#   VERSION="$(cat VERSION)" docker compose run --rm sync
+
+x-screeny: &screeny
+  build:
+    context: .
+    args:
+      VERSION: ${VERSION:?set VERSION, for example VERSION="$(cat VERSION)"}
+  image: screeny:dev
+  volumes:
+    - ./config.local.toml:/etc/screeny/config.toml:ro
+    - screeny-data:/data
+
+services:
+  screeny:
+    <<: *screeny
+    command: ["serve"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "/screeny", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  sync:
+    <<: *screeny
+    command: ["catalog", "sync"]
+    profiles: ["tools"]
+
+volumes:
+  screeny-data:
