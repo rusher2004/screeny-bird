@@ -30,8 +30,11 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 | --- | --- |
 | `GET /healthz` | Liveness, the number of species served, and `pending_derive` (species waiting for their derived image, omitted when none). `503` if the latest catalog reload failed while an older valid catalog is still being served. |
 | `GET /v1/catalog` | The species list: `schema_version`, `generated_at`, and per species its names, slug, approval time, the paths and SHA-256 of its portrait and display images, and its `derived` screensaver-sized image (`path`, `sha256`, `width`, `height`). |
+| `GET /v1/openapi.yaml` | This API's OpenAPI description, as the running server version implements it. The same file is [api/openapi.yaml](api/openapi.yaml). |
 | `GET /v1/derived/<path>` | One derived screensaver-sized PNG named by a species' `derived.path`, sent only after its bytes match the recorded checksum. `?sha256=<digest>` works the same way as for assets. |
 | `GET /v1/assets/<path>` | One PNG listed in the catalog, sent only after its bytes match the catalog's checksum. Add `?sha256=<digest>` to make the response cacheable forever. |
+
+The routes, fields, caching and error responses are described in [api/openapi.yaml](api/openapi.yaml), the contract the screensaver clients are written against. Tests check the server's real responses against it.
 
 Only `GET` and `HEAD` are accepted. Responses carry an `ETag` and answer `If-None-Match`. Browser access from another origin is off unless that exact origin is configured.
 
@@ -115,6 +118,7 @@ go build -ldflags "-X main.version=$(cat VERSION)" -o screeny ./cmd
 | `upstream` | Reading the source catalog from GitHub at one commit. |
 | `mirror` | Adding the species the local catalog lacks. |
 | `derive` | Building screensaver-sized images. |
+| `api` | The OpenAPI description of the HTTP interface. |
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 

@@ -16,6 +16,7 @@ const (
 	catalogPath = "/v1/catalog"
 	assetsPath  = "/v1/assets/"
 	derivedPath = "/v1/derived/"
+	specPath    = "/v1/openapi.yaml"
 )
 
 const (
@@ -33,6 +34,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc(healthPath, methodNotAllowed)
 	mux.HandleFunc("GET "+catalogPath, s.withCORS(s.catalog))
 	mux.HandleFunc(catalogPath, methodNotAllowed)
+	mux.HandleFunc("GET "+specPath, s.withCORS(s.spec))
+	mux.HandleFunc(specPath, methodNotAllowed)
 	mux.HandleFunc("GET "+assetsPath+"{path...}", s.withCORS(s.asset))
 	mux.HandleFunc(assetsPath+"{path...}", methodNotAllowed)
 	mux.HandleFunc("GET "+derivedPath+"{path...}", s.withCORS(s.derivedImage))
@@ -173,20 +176,43 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 	snap := s.state.Load()
 
-	w.Header().Set("ETag", snap.catalogETag)
+	serveDocument(w, r, snap.catalogETag, "application/json", snap.catalogJSON)
+}
+
+// spec serves the OpenAPI document this server implements.
+func (s *Server) spec(w http.ResponseWriter, r *http.Request) {
+	serveDocument(w, r, s.specETag, "application/yaml", s.specDoc)
+}
+
+// serveDocument sends body, or an empty 304 when the client already holds the
+// version etag names. Documents are revalidated on every use.
+func serveDocument(w http.ResponseWriter, r *http.Request, etag, contentType string, body []byte) {
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", revalidate)
 
-	if etagMatches(r.Header.Get("If-None-Match"), snap.catalogETag) {
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(snap.catalogJSON)))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 
 	// The client may have gone away; there is nobody left to tell.
-	_, _ = w.Write(snap.catalogJSON)
+	_, _ = w.Write(body)
+}
+
+// quoted writes a digest as a strong ETag.
+func quoted(digest string) string {
+	return `"` + digest + `"`
+}
+
+// etagOf is the strong ETag of body: its SHA-256.
+func etagOf(body []byte) string {
+	sum := sha256.Sum256(body)
+
+	return quoted(hex.EncodeToString(sum[:]))
 }
 
 // asset serves one image the catalog lists, after checking its bytes against
@@ -217,7 +243,7 @@ func (s *Server) serveImage(w http.ResponseWriter, r *http.Request, listed map[s
 		return
 	}
 
-	etag := `"` + want + `"`
+	etag := quoted(want)
 	cache := revalidate
 
 	// A request that names the exact digest can be cached forever, because the

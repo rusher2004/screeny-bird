@@ -3,8 +3,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -84,6 +83,8 @@ type Options struct {
 	Log      accessLog
 	// Version is the application version /healthz reports.
 	Version string
+	// Spec is the OpenAPI document served at /v1/openapi.yaml.
+	Spec []byte
 	// AllowedOrigins are the browser origins allowed to read the catalog and
 	// images. An empty, non-nil list allows none.
 	AllowedOrigins    []string
@@ -97,6 +98,10 @@ type Options struct {
 type Server struct {
 	opts    Options
 	allowed map[string]bool
+	// specDoc is the server's own copy of the OpenAPI document, so a caller
+	// that later changes its slice cannot make the body and ETag disagree.
+	specDoc  []byte
+	specETag string
 
 	// state is the catalog being served. It is replaced whole, never edited.
 	state atomic.Pointer[snapshot]
@@ -123,6 +128,7 @@ func New(opts Options) (*Server, error) {
 		{"ticker", opts.Ticker == nil},
 		{"log", opts.Log == nil},
 		{"version", strings.TrimSpace(opts.Version) == ""},
+		{"spec", len(opts.Spec) == 0},
 		{"allowed origins", opts.AllowedOrigins == nil},
 	} {
 		if dep.missing {
@@ -160,7 +166,9 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("creating server: %w: %w", ErrInvalidServer, err)
 	}
 
-	return &Server{opts: opts, allowed: allowed}, nil
+	specDoc := slices.Clone(opts.Spec)
+
+	return &Server{opts: opts, allowed: allowed, specDoc: specDoc, specETag: etagOf(specDoc)}, nil
 }
 
 // snapshot is one validated catalog, ready to serve.
@@ -317,13 +325,12 @@ func (s *Server) load() (*snapshot, error) {
 		return nil, fmt.Errorf("encoding the catalog: %w", err)
 	}
 
-	digest := sha256.Sum256(body)
 	snap := &snapshot{
 		indexVersion: version,
 		species:      len(served),
 		pending:      pending,
 		catalogJSON:  body,
-		catalogETag:  `"` + hex.EncodeToString(digest[:]) + `"`,
+		catalogETag:  etagOf(body),
 		assets:       make(map[string]string, 2*len(served)),
 		derived:      make(map[string]string, len(served)),
 	}

@@ -1,0 +1,436 @@
+openapi: 3.0.3
+info:
+  title: Screeny Bird API
+  version: 1.0.0
+  description: |
+    Read-only HTTP API for the bird plate catalog, for the screensaver clients.
+
+    There are no credentials and no write operations. Only GET and HEAD are accepted; any other method is answered with 405 and an `Allow` header. Every response carries `X-Content-Type-Options: nosniff`, and every error and health response is `Cache-Control: no-store`. Cross-origin browser access is granted only to origins the operator configured exactly, never with credentials; native clients are unaffected.
+
+    The client is configured with the server's base URL, so no `servers` entry is declared.
+
+    ## How a client should use it
+
+    1. `GET /v1/catalog`, sending `If-None-Match` with the last `ETag`. A `304` means the cached list is current. Species appear here only once the server has a screensaver-sized image for them, so the list can grow over time.
+    2. For each species, fetch its image from `/v1/derived/{path}` using `derived.path`. Add `?sha256=` with `derived.sha256` to make the response cacheable forever: the content at that address never changes. Check the bytes against `derived.sha256` before showing them.
+    3. The original plates are at `/v1/assets/{path}` using `portrait_path` and `display_path`. `display_path` is the plate rotated 90 degrees for a landscape e-ink frame, so its text runs sideways; a screensaver wants the derived image or `portrait_path`.
+    4. A `503` on an image means the server could not verify it. Skip that species and try again later.
+
+    Image `{path}` values contain slashes (for example `species/16638-acadian-flycatcher/3840x2160.png`). Append the value from the catalog to the route prefix as is; do not build one yourself. A client that percent-encodes the slashes as `%2F` is also understood.
+tags:
+  - name: health
+  - name: catalog
+  - name: images
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness and the size of the served catalog
+      description: |
+        `200` while the server is healthy. `503` when the latest reload of the catalog failed and an older, valid catalog is still being served. A species that is waiting for its derived image does not make the server unhealthy; it is counted in `pending_derive`.
+      responses:
+        "200":
+          $ref: "#/components/responses/Healthy"
+        "503":
+          $ref: "#/components/responses/Unhealthy"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /v1/catalog:
+    get:
+      tags: [catalog]
+      operationId: getCatalog
+      summary: The list of species the server can show
+      description: |
+        Species are sorted by common name, ignoring case. The response is validated before it is served and carries a strong `ETag`; send it back in `If-None-Match` to get `304` when nothing changed.
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Catalog"
+        "304":
+          $ref: "#/components/responses/DocumentNotModified"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /v1/openapi.yaml:
+    get:
+      tags: [catalog]
+      operationId: getOpenAPI
+      summary: This document, as the running server describes itself
+      description: The contract this server version implements. Clients can fetch it to check they are talking to a compatible API.
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/OpenAPIDocument"
+        "304":
+          $ref: "#/components/responses/DocumentNotModified"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /v1/assets/{path}:
+    get:
+      tags: [images]
+      operationId: getAsset
+      summary: One original plate listed in the catalog
+      description: |
+        `path` is a species' `portrait_path` or `display_path`. The bytes are sent only after they match the SHA-256 the catalog declares; if they do not, or the file is missing, the answer is `503` and nothing is sent. Anything the catalog does not list is `404`.
+      parameters:
+        - $ref: "#/components/parameters/ImagePath"
+        - $ref: "#/components/parameters/Sha256"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Image"
+        "304":
+          $ref: "#/components/responses/ImageNotModified"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          $ref: "#/components/responses/ImageUnavailable"
+  /v1/derived/{path}:
+    get:
+      tags: [images]
+      operationId: getDerivedImage
+      summary: One screensaver-sized image
+      description: |
+        `path` is a species' `derived.path`. The image is the whole upright plate scaled to `derived.width` by `derived.height` and padded with a solid color taken from the plate's own border, so nothing is cropped. It is sent only after its bytes match `derived.sha256`; otherwise the answer is `503`.
+      parameters:
+        - $ref: "#/components/parameters/ImagePath"
+        - $ref: "#/components/parameters/Sha256"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Image"
+        "304":
+          $ref: "#/components/responses/ImageNotModified"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          $ref: "#/components/responses/ImageUnavailable"
+components:
+  parameters:
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: The `ETag` of the copy the client holds.
+      schema:
+        type: string
+    ImagePath:
+      name: path
+      in: path
+      required: true
+      description: The path exactly as the catalog gives it. It contains slashes, which may be sent as is or percent-encoded as `%2F`; the server accepts both.
+      schema:
+        type: string
+        example: species/16638-acadian-flycatcher/3840x2160.png
+    Sha256:
+      name: sha256
+      in: query
+      required: false
+      description: The image's SHA-256 from the catalog. When it matches, the response is cacheable forever.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+  headers:
+    ETag:
+      required: true
+      description: A strong validator. For images it is the image's SHA-256 in quotes.
+      schema:
+        type: string
+    CacheControlRevalidate:
+      required: true
+      description: "`no-cache`: store it, but revalidate before reuse."
+      schema:
+        type: string
+    CacheControlImage:
+      required: true
+      description: "`public, max-age=31536000, immutable` when `sha256` matches the image, otherwise `no-cache`."
+      schema:
+        type: string
+    CacheControlNoStore:
+      required: true
+      description: "`no-store`: this response must not be cached."
+      schema:
+        type: string
+    NoSniff:
+      required: true
+      description: "`nosniff`. Sent on every response."
+      schema:
+        type: string
+    Vary:
+      required: true
+      description: "`Origin`: whether the CORS header is present depends on the request's origin. Sent on every response from a route browsers may read."
+      schema:
+        type: string
+    AllowOrigin:
+      required: false
+      description: Echoes the request's `Origin` when the operator listed that exact origin. Never `*`, and credentials are never allowed.
+      schema:
+        type: string
+    Allow:
+      required: true
+      description: "`GET, HEAD`"
+      schema:
+        type: string
+  responses:
+    Healthy:
+      description: Healthy.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Health"
+    Unhealthy:
+      description: The latest reload failed; the previous catalog is still served.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Health"
+    Catalog:
+      description: The catalog.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Catalog"
+    OpenAPIDocument:
+      description: The OpenAPI document.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/yaml:
+          schema:
+            type: object
+            description: An OpenAPI document.
+    DocumentNotModified:
+      description: The client's copy is current.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+    Image:
+      description: The verified PNG.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlImage"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        image/png:
+          schema:
+            type: string
+            format: binary
+    ImageNotModified:
+      description: The client's copy is current.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlImage"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+    NotFound:
+      description: The path is not an image this server lists.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    MethodNotAllowed:
+      description: Only GET and HEAD are accepted.
+      headers:
+        Allow:
+          $ref: "#/components/headers/Allow"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ImageUnavailable:
+      description: The file is missing or its bytes do not match the recorded checksum, so nothing was sent.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [ok, version, species]
+      properties:
+        ok:
+          type: boolean
+        version:
+          type: string
+          description: The server's application version.
+        species:
+          type: integer
+          description: How many species the catalog response lists.
+        generated_at:
+          type: string
+          description: When the newest species was approved. Omitted when there are no species.
+        pending_derive:
+          type: integer
+          description: Species in the catalog that are not served yet because their derived image does not exist. Omitted when none.
+        reload:
+          type: string
+          enum: [failing]
+          description: Present only while the latest reload failed.
+    Catalog:
+      type: object
+      additionalProperties: false
+      required: [generated_at, schema_version, species]
+      properties:
+        generated_at:
+          type: string
+          nullable: true
+          description: When the newest species was approved, or null when there are none.
+        schema_version:
+          type: integer
+          enum: [1]
+        species:
+          type: array
+          items:
+            $ref: "#/components/schemas/Species"
+    Species:
+      type: object
+      additionalProperties: false
+      required:
+        - approved_at
+        - common_name
+        - derived
+        - display_path
+        - display_sha256
+        - portrait_path
+        - portrait_sha256
+        - scientific_name
+        - slug
+        - taxon_id
+      properties:
+        approved_at:
+          type: string
+          format: date-time
+          description: When the plate was approved for publication.
+        common_name:
+          type: string
+        scientific_name:
+          type: string
+        slug:
+          type: string
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+        taxon_id:
+          type: integer
+          minimum: 1
+          description: The iNaturalist taxon ID. Stable for a species forever.
+        derived:
+          $ref: "#/components/schemas/DerivedImage"
+        portrait_path:
+          type: string
+          description: The upright plate, 1200 by 1600, for `/v1/assets/{path}`.
+        portrait_sha256:
+          $ref: "#/components/schemas/Sha256"
+        display_path:
+          type: string
+          description: The plate rotated 90 degrees for a landscape e-ink frame, 1600 by 1200, for `/v1/assets/{path}`. Its text runs sideways.
+        display_sha256:
+          $ref: "#/components/schemas/Sha256"
+    DerivedImage:
+      type: object
+      additionalProperties: false
+      required: [height, path, sha256, width]
+      properties:
+        path:
+          type: string
+          description: For `/v1/derived/{path}`.
+        sha256:
+          $ref: "#/components/schemas/Sha256"
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+    Sha256:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+      description: A SHA-256 digest in lowercase hex.
+    Error:
+      type: object
+      additionalProperties: false
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string

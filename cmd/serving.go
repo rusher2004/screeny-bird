@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rusher2004/screeny-bird/api"
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/config"
 	"github.com/rusher2004/screeny-bird/derive"
@@ -28,6 +29,7 @@ func newServer(cfg config.Config, version string, store catalog.DirLoader, deriv
 		Ticker:            server.TimeTicker{},
 		Log:               requestLogger{logger: logger},
 		Version:           version,
+		Spec:              api.Spec,
 		AllowedOrigins:    cfg.CORSAllowedOrigins,
 		ReadHeaderTimeout: time.Duration(cfg.ReadHeaderTimeoutSeconds) * time.Second,
 		WriteTimeout:      time.Duration(cfg.WriteTimeoutSeconds) * time.Second,

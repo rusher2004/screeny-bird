@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rusher2004/screeny-bird/api"
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/derive"
 	"github.com/rusher2004/screeny-bird/server"
@@ -291,15 +294,17 @@ type harness struct {
 	dir          string
 	derivedDir   string
 	derivedReads atomic.Int32
-	store        *countingStore
-	provider     *listenerProvider
-	ticker       *fakeTicker
-	log          *fakeLog
-	client       *http.Client
-	cancel       context.CancelFunc
-	done         chan error
-	opts         server.Options
-	serveOnce    sync.Once
+	// covered records the spec paths conforms has checked.
+	covered   map[string]bool
+	store     *countingStore
+	provider  *listenerProvider
+	ticker    *fakeTicker
+	log       *fakeLog
+	client    *http.Client
+	cancel    context.CancelFunc
+	done      chan error
+	opts      server.Options
+	serveOnce sync.Once
 }
 
 // newHarness prepares a server but does not start it.
@@ -326,6 +331,7 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 		t:          t,
 		dir:        dir,
 		derivedDir: derivedDir,
+		covered:    map[string]bool{},
 		store:      &countingStore{inner: loader},
 		provider:   &listenerProvider{listener: pipe},
 		ticker:     &fakeTicker{ticks: make(chan struct{}, 4)},
@@ -347,6 +353,7 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 		Ticker:            h.ticker,
 		Log:               h.log,
 		Version:           "9.9.9",
+		Spec:              api.Spec,
 		AllowedOrigins:    origins,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Second,
@@ -507,6 +514,7 @@ func TestNewRequiresEveryOption(t *testing.T) {
 		"ticker":          func(o server.Options) server.Options { o.Ticker = nil; return o },
 		"log":             func(o server.Options) server.Options { o.Log = nil; return o },
 		"version":         func(o server.Options) server.Options { o.Version = " "; return o },
+		"spec":            func(o server.Options) server.Options { o.Spec = nil; return o },
 		"allowed origins": func(o server.Options) server.Options { o.AllowedOrigins = nil; return o },
 		"read header timeout": func(o server.Options) server.Options {
 			o.ReadHeaderTimeout = 0
@@ -533,6 +541,31 @@ func TestNewRequiresEveryOption(t *testing.T) {
 	}
 }
 
+func TestTheServerKeepsItsOwnCopyOfTheSpec(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren)
+	spec := slices.Clone(api.Spec)
+	h.opts.Spec = spec
+
+	h.start()
+
+	// Changing the caller's slice after New must not change what is served.
+	for i := range spec {
+		spec[i] = 'X'
+	}
+
+	resp := h.get("/v1/openapi.yaml")
+	if string(resp.body) != string(api.Spec) {
+		t.Fatal("the served spec changed when the caller's slice did")
+	}
+
+	digest := sha256.Sum256(resp.body)
+	if want := `"` + hex.EncodeToString(digest[:]) + `"`; resp.header.Get("ETag") != want {
+		t.Errorf("ETag = %q, want %q for the bytes served", resp.header.Get("ETag"), want)
+	}
+}
+
 func TestNewReportsEveryProblemTogether(t *testing.T) {
 	t.Parallel()
 
@@ -541,7 +574,7 @@ func TestNewReportsEveryProblemTogether(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrInvalidServer", err)
 	}
 
-	for _, want := range []string{"store", "derived store", "listener", "ticker", "log", "version", "allowed origins", "read header timeout", "reload interval"} {
+	for _, want := range []string{"store", "derived store", "listener", "ticker", "log", "version", "spec", "allowed origins", "read header timeout", "reload interval"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}

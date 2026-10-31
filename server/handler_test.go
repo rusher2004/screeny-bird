@@ -1,16 +1,26 @@
 package server_test
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/rusher2004/screeny-bird/catalog"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
+
+	"github.com/rusher2004/screeny-bird/api"
+	"github.com/rusher2004/screeny-bird/catalog"
 )
 
 func fileSum(t *testing.T, path string) (data []byte, digest string) {
@@ -619,5 +629,194 @@ func TestDerivedImagesHonorCORSLikeCatalogImages(t *testing.T) {
 	resp = h.do(http.MethodGet, derivedURL(wren), map[string]string{"Origin": "https://other.example.test"})
 	if got := resp.header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Allow-Origin = %q for an unlisted origin, want none", got)
+	}
+}
+
+var (
+	specOnce sync.Once
+	specDoc  *openapi3.T
+	specErr  error
+)
+
+func loadSpec(t *testing.T) *openapi3.T {
+	t.Helper()
+
+	specOnce.Do(func() { specDoc, specErr = openapi3.NewLoader().LoadFromData(api.Spec) })
+
+	if specErr != nil {
+		t.Fatalf("loading the spec: %v", specErr)
+	}
+
+	return specDoc
+}
+
+// conforms makes a request and checks that the response is one the spec
+// describes for that operation: the status, headers and body shape. template
+// is the spec's path; a method the spec does not declare is checked against
+// the GET operation, whose 405 response is the one every route shares.
+func (h *harness) conforms(method, template, path string, headers map[string]string, wantStatus int) response {
+	h.t.Helper()
+
+	doc := loadSpec(h.t)
+	item := doc.Paths.Find(template)
+
+	if item == nil || item.Get == nil {
+		h.t.Fatalf("the spec has no GET %s", template)
+	}
+
+	h.covered[template] = true
+
+	resp := h.do(method, path, headers)
+	if resp.status != wantStatus {
+		h.t.Fatalf("%s %s = %d, want %d", method, path, resp.status, wantStatus)
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), method, "http://screeny.test"+path, http.NoBody)
+	if err != nil {
+		h.t.Fatalf("building request: %v", err)
+	}
+
+	input := &openapi3filter.ResponseValidationInput{
+		RequestValidationInput: &openapi3filter.RequestValidationInput{
+			Request: req,
+			Route:   &routers.Route{Spec: doc, Path: template, PathItem: item, Method: http.MethodGet, Operation: item.Get},
+		},
+		Status: resp.status,
+		Header: resp.header,
+		Body:   io.NopCloser(bytes.NewReader(resp.body)),
+		// A status the spec does not list is a mismatch, not a pass.
+		Options: &openapi3filter.Options{IncludeResponseStatus: true},
+	}
+
+	if err := openapi3filter.ValidateResponse(context.Background(), input); err != nil {
+		h.t.Fatalf("%s %s = %d does not match the spec: %v", method, path, resp.status, err)
+	}
+
+	// ValidateResponse skips 304 and HEAD responses entirely, so check the
+	// headers the spec requires for this status ourselves.
+	h.requireDeclaredHeaders(item.Get, resp, method, path)
+
+	return resp
+}
+
+// requireDeclaredHeaders fails when a response lacks a header the spec marks
+// required for its status.
+func (h *harness) requireDeclaredHeaders(op *openapi3.Operation, resp response, method, path string) {
+	h.t.Helper()
+
+	ref := op.Responses.Status(resp.status)
+	if ref == nil || ref.Value == nil {
+		h.t.Fatalf("%s %s = %d, which the spec does not declare", method, path, resp.status)
+	}
+
+	for name, header := range ref.Value.Headers {
+		if header.Value != nil && header.Value.Required && resp.header.Get(name) == "" {
+			h.t.Errorf("%s %s = %d is missing the required header %s", method, path, resp.status, name)
+		}
+	}
+}
+
+func TestResponsesMatchTheSpec(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{"https://app.example.test"}, wren, finch).start()
+
+	_, portraitDigest := fileSum(t, filepath.Join(h.dir, "species", wren, "portrait.png"))
+	_, derivedDigest := fileSum(t, filepath.Join(h.derivedDir, "species", wren, fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)))
+	derived := derivedURL(wren)
+	portrait := "/v1/assets/species/" + wren + "/portrait.png"
+
+	h.conforms(http.MethodGet, "/healthz", "/healthz", nil, http.StatusOK)
+
+	catalogResp := h.conforms(http.MethodGet, "/v1/catalog", "/v1/catalog", nil, http.StatusOK)
+	h.conforms(http.MethodGet, "/v1/catalog", "/v1/catalog", map[string]string{"If-None-Match": catalogResp.header.Get("ETag")}, http.StatusNotModified)
+	h.conforms(http.MethodGet, "/v1/catalog", "/v1/catalog", map[string]string{"Origin": "https://app.example.test"}, http.StatusOK)
+
+	specResp := h.conforms(http.MethodGet, "/v1/openapi.yaml", "/v1/openapi.yaml", nil, http.StatusOK)
+	if string(specResp.body) != string(api.Spec) {
+		t.Error("/v1/openapi.yaml does not serve the embedded document")
+	}
+
+	h.conforms(http.MethodGet, "/v1/openapi.yaml", "/v1/openapi.yaml", map[string]string{"If-None-Match": specResp.header.Get("ETag")}, http.StatusNotModified)
+
+	h.conforms(http.MethodHead, "/v1/catalog", "/v1/catalog", nil, http.StatusOK)
+	h.conforms(http.MethodHead, "/v1/derived/{path}", derived, nil, http.StatusOK)
+
+	h.conforms(http.MethodGet, "/v1/assets/{path}", portrait, nil, http.StatusOK)
+	h.conforms(http.MethodGet, "/v1/assets/{path}", portrait+"?sha256="+portraitDigest, nil, http.StatusOK)
+	h.conforms(http.MethodGet, "/v1/assets/{path}", portrait, map[string]string{"If-None-Match": `"` + portraitDigest + `"`}, http.StatusNotModified)
+	h.conforms(http.MethodGet, "/v1/assets/{path}", "/v1/assets/species/"+wren+"/nope.png", nil, http.StatusNotFound)
+
+	h.conforms(http.MethodGet, "/v1/derived/{path}", derived, nil, http.StatusOK)
+	h.conforms(http.MethodGet, "/v1/derived/{path}", derived+"?sha256="+derivedDigest, nil, http.StatusOK)
+	h.conforms(http.MethodGet, "/v1/derived/{path}", derived, map[string]string{"If-None-Match": `"` + derivedDigest + `"`}, http.StatusNotModified)
+	h.conforms(http.MethodGet, "/v1/derived/{path}", "/v1/derived/species/"+wren+"/portrait.png", nil, http.StatusNotFound)
+
+	for _, route := range []struct{ template, path string }{
+		{"/healthz", "/healthz"},
+		{"/v1/catalog", "/v1/catalog"},
+		{"/v1/openapi.yaml", "/v1/openapi.yaml"},
+		{"/v1/assets/{path}", portrait},
+		{"/v1/derived/{path}", derived},
+	} {
+		resp := h.conforms(http.MethodPost, route.template, route.path, nil, http.StatusMethodNotAllowed)
+		if resp.header.Get("Allow") != "GET, HEAD" {
+			t.Errorf("POST %s: Allow = %q, want %q", route.path, resp.header.Get("Allow"), "GET, HEAD")
+		}
+	}
+
+	// Every path the spec documents was exercised, so a documented route the
+	// server does not serve, or one this test forgot, fails here.
+	for template := range loadSpec(t).Paths.Map() {
+		if !h.covered[template] {
+			t.Errorf("the spec documents %s but this test never requested it", template)
+		}
+	}
+}
+
+func TestUnavailableAndFailingResponsesMatchTheSpec(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+
+	// A second species whose portrait is then broken makes the next reload
+	// fail, while the first species keeps being served.
+	addSpecies(t, h.dir, finch)
+	rebuild(t, h.dir)
+	h.rederive()
+
+	if err := os.Remove(filepath.Join(h.dir, "species", finch, "portrait.png")); err != nil {
+		t.Fatalf("removing portrait: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(h.derivedDir, "species", wren, fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)), []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("tampering: %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(h.dir, "species", wren, "display.png")); err != nil {
+		t.Fatalf("removing display: %v", err)
+	}
+
+	h.ticker.fire()
+
+	eventually(t, "the reload to fail", func() bool { return h.get("/healthz").status == http.StatusServiceUnavailable })
+
+	h.conforms(http.MethodGet, "/healthz", "/healthz", nil, http.StatusServiceUnavailable)
+	h.conforms(http.MethodGet, "/v1/derived/{path}", derivedURL(wren), nil, http.StatusServiceUnavailable)
+	h.conforms(http.MethodGet, "/v1/assets/{path}", "/v1/assets/species/"+wren+"/display.png", nil, http.StatusServiceUnavailable)
+}
+
+func TestEncodedSlashesInImagePathsAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+
+	for _, path := range []string{
+		"/v1/derived/species%2F" + wren + "%2F" + fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight),
+		"/v1/assets/species%2F" + wren + "%2Fportrait.png",
+	} {
+		if resp := h.get(path); resp.status != http.StatusOK || resp.header.Get("Content-Type") != "image/png" {
+			t.Errorf("GET %s = %d %q, want the image, as the spec says encoded slashes are accepted", path, resp.status, resp.header.Get("Content-Type"))
+		}
 	}
 }

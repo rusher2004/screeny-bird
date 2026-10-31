@@ -43,6 +43,10 @@ func TestAuditCleanTree(t *testing.T) {
 		"commands/commands.go": "package commands\n\n" +
 			"type reader interface{ Read() error }\n\nfunc use(r reader) error { return r.Read() }\n",
 		"cmd/main.go": "package main\n\nimport \"os\"\n\nfunc main() { _ = os.Getenv(\"X\") }\n",
+		// A route the spec describes, including a prefix route written with a
+		// trailing slash and documented with a path parameter.
+		"server/handler.go": "package server\n\nconst (\n\thealthPath = \"/healthz\"\n\tassetsPath = \"/v1/assets/\"\n)\n",
+		"api/openapi.yaml":  "openapi: 3.0.3\npaths:\n  /healthz:\n    get: {}\n  /v1/assets/{path}:\n    get: {}\n",
 	})
 
 	got, err := audit(root)
@@ -120,6 +124,23 @@ func TestAuditReportsViolations(t *testing.T) {
 			},
 			kind: kindAmbientAccess,
 			path: "cmd/main.go",
+		},
+		{
+			name: "route missing from the spec",
+			files: map[string]string{
+				"server/handler.go": "package server\n\nconst (\n\thealthPath = \"/healthz\"\n\tcatalogPath = \"/v1/catalog\"\n)\n",
+				"api/openapi.yaml":  "openapi: 3.0.3\npaths:\n  /healthz:\n    get: {}\n",
+			},
+			kind: kindUndocumentedRoute,
+			path: "server/handler.go",
+		},
+		{
+			name: "route with no spec at all",
+			files: map[string]string{
+				"server/handler.go": "package server\n\nconst healthPath = \"/healthz\"\n",
+			},
+			kind: kindUndocumentedRoute,
+			path: "server/handler.go",
 		},
 		{
 			name: "flag default value",
