@@ -1,4 +1,4 @@
-// Package commands holds the screeny command tree and its composition root.
+// Package commands holds the screeny command tree.
 package commands
 
 import (
@@ -36,15 +36,15 @@ func (e *ExitError) Error() string {
 	return e.Msg
 }
 
-// CatalogLoader loads the catalog a command validates.
-type CatalogLoader interface {
+// catalogLoader loads the catalog a command validates.
+type catalogLoader interface {
 	Load() (*catalog.Catalog, error)
 }
 
 // Options is everything the command tree depends on. Every field is required.
 type Options struct {
 	Writer   io.Writer
-	Catalogs CatalogLoader
+	Catalogs catalogLoader
 }
 
 // New builds the command tree from explicit dependencies. Run on the result
@@ -98,13 +98,13 @@ func New(opts Options) (*cli.Command, error) {
 					{
 						Name:  "validate",
 						Usage: "Check the catalog against its rules",
-						Action: func(_ context.Context, cmd *cli.Command) error {
+						Action: func(context.Context, *cli.Command) error {
 							loaded, err := opts.Catalogs.Load()
 							if err != nil {
 								return fmt.Errorf("validating catalog: %w", err)
 							}
 
-							if _, err := fmt.Fprintf(cmd.Root().Writer, "validated %d species\n", len(loaded.Species())); err != nil {
+							if _, err := fmt.Fprintf(opts.Writer, "validated %d species\n", len(loaded.Species())); err != nil {
 								return fmt.Errorf("writing validation result: %w", err)
 							}
 
@@ -116,12 +116,12 @@ func New(opts Options) (*cli.Command, error) {
 			{
 				Name:  "version",
 				Usage: "Print the application version",
-				Action: func(_ context.Context, cmd *cli.Command) error {
+				Action: func(context.Context, *cli.Command) error {
 					if version == "" {
 						return fmt.Errorf("reading the version: %w", ErrNoVersion)
 					}
 
-					if _, err := fmt.Fprintln(cmd.Root().Writer, version); err != nil {
+					if _, err := fmt.Fprintln(opts.Writer, version); err != nil {
 						return fmt.Errorf("writing version: %w", err)
 					}
 

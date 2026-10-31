@@ -29,7 +29,12 @@ func (f *fakeCatalogs) Load() (*catalog.Catalog, error) {
 	return &catalog.Catalog{}, nil
 }
 
-func run(t *testing.T, catalogs commands.CatalogLoader, args ...string) (output string, err error) {
+// catalogLoader is the shape of loader commands.Options accepts.
+type catalogLoader = interface {
+	Load() (*catalog.Catalog, error)
+}
+
+func run(t *testing.T, catalogs catalogLoader, args ...string) (output string, err error) {
 	t.Helper()
 
 	var buf bytes.Buffer
@@ -190,7 +195,7 @@ func TestCatalogValidateUsesTheRealCatalogPackage(t *testing.T) {
 		t.Fatalf("writing index: %v", err)
 	}
 
-	loaderFor := func(dir string) commands.CatalogLoader {
+	loaderFor := func(dir string) catalogLoader {
 		loader, err := catalog.NewDirLoader(dir)
 		if err != nil {
 			t.Fatalf("NewDirLoader(%q) error = %v", dir, err)
