@@ -16,6 +16,7 @@ const (
 	catalogPath = "/v1/catalog"
 	assetsPath  = "/v1/assets/"
 	derivedPath = "/v1/derived/"
+	specPath    = "/v1/openapi.yaml"
 )
 
 const (
@@ -33,6 +34,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc(healthPath, methodNotAllowed)
 	mux.HandleFunc("GET "+catalogPath, s.withCORS(s.catalog))
 	mux.HandleFunc(catalogPath, methodNotAllowed)
+	mux.HandleFunc("GET "+specPath, s.withCORS(s.spec))
+	mux.HandleFunc(specPath, methodNotAllowed)
 	mux.HandleFunc("GET "+assetsPath+"{path...}", s.withCORS(s.asset))
 	mux.HandleFunc(assetsPath+"{path...}", methodNotAllowed)
 	mux.HandleFunc("GET "+derivedPath+"{path...}", s.withCORS(s.derivedImage))
@@ -187,6 +190,24 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 
 	// The client may have gone away; there is nobody left to tell.
 	_, _ = w.Write(snap.catalogJSON)
+}
+
+// spec serves the OpenAPI document this server implements.
+func (s *Server) spec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("ETag", s.specETag)
+	w.Header().Set("Cache-Control", revalidate)
+
+	if etagMatches(r.Header.Get("If-None-Match"), s.specETag) {
+		w.WriteHeader(http.StatusNotModified)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Length", strconv.Itoa(len(s.opts.Spec)))
+
+	// The client may have gone away; there is nobody left to tell.
+	_, _ = w.Write(s.opts.Spec)
 }
 
 // asset serves one image the catalog lists, after checking its bytes against

@@ -44,6 +44,7 @@ SOFTWARE.
 | --- | --- | --- |
 | `github.com/urfave/cli/v3` | MIT, Copyright (c) 2023 urfave/cli maintainers | <https://github.com/urfave/cli> |
 | `github.com/pelletier/go-toml/v2` | MIT, Copyright (c) 2021 - 2023 Thomas Pelletier | <https://github.com/pelletier/go-toml> |
+| `github.com/getkin/kin-openapi` | MIT, Copyright (c) 2017-2018 the project authors | <https://github.com/getkin/kin-openapi> |
 | `golang.org/x/image` | BSD-3-Clause, Copyright 2009 The Go Authors | <https://pkg.go.dev/golang.org/x/image> |
 
 Installed Go modules retain the license and copyright material in their own repositories.

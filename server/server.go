@@ -84,6 +84,8 @@ type Options struct {
 	Log      accessLog
 	// Version is the application version /healthz reports.
 	Version string
+	// Spec is the OpenAPI document served at /v1/openapi.yaml.
+	Spec []byte
 	// AllowedOrigins are the browser origins allowed to read the catalog and
 	// images. An empty, non-nil list allows none.
 	AllowedOrigins    []string
@@ -95,8 +97,9 @@ type Options struct {
 
 // Server serves one catalog. Build it with New and run it with Serve.
 type Server struct {
-	opts    Options
-	allowed map[string]bool
+	opts     Options
+	allowed  map[string]bool
+	specETag string
 
 	// state is the catalog being served. It is replaced whole, never edited.
 	state atomic.Pointer[snapshot]
@@ -123,6 +126,7 @@ func New(opts Options) (*Server, error) {
 		{"ticker", opts.Ticker == nil},
 		{"log", opts.Log == nil},
 		{"version", strings.TrimSpace(opts.Version) == ""},
+		{"spec", len(opts.Spec) == 0},
 		{"allowed origins", opts.AllowedOrigins == nil},
 	} {
 		if dep.missing {
@@ -160,7 +164,9 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("creating server: %w: %w", ErrInvalidServer, err)
 	}
 
-	return &Server{opts: opts, allowed: allowed}, nil
+	digest := sha256.Sum256(opts.Spec)
+
+	return &Server{opts: opts, allowed: allowed, specETag: `"` + hex.EncodeToString(digest[:]) + `"`}, nil
 }
 
 // snapshot is one validated catalog, ready to serve.

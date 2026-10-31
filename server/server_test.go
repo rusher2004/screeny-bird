@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rusher2004/screeny-bird/api"
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/derive"
 	"github.com/rusher2004/screeny-bird/server"
@@ -347,6 +348,7 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 		Ticker:            h.ticker,
 		Log:               h.log,
 		Version:           "9.9.9",
+		Spec:              api.Spec,
 		AllowedOrigins:    origins,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Second,
@@ -507,6 +509,7 @@ func TestNewRequiresEveryOption(t *testing.T) {
 		"ticker":          func(o server.Options) server.Options { o.Ticker = nil; return o },
 		"log":             func(o server.Options) server.Options { o.Log = nil; return o },
 		"version":         func(o server.Options) server.Options { o.Version = " "; return o },
+		"spec":            func(o server.Options) server.Options { o.Spec = nil; return o },
 		"allowed origins": func(o server.Options) server.Options { o.AllowedOrigins = nil; return o },
 		"read header timeout": func(o server.Options) server.Options {
 			o.ReadHeaderTimeout = 0
@@ -541,7 +544,7 @@ func TestNewReportsEveryProblemTogether(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrInvalidServer", err)
 	}
 
-	for _, want := range []string{"store", "derived store", "listener", "ticker", "log", "version", "allowed origins", "read header timeout", "reload interval"} {
+	for _, want := range []string{"store", "derived store", "listener", "ticker", "log", "version", "spec", "allowed origins", "read header timeout", "reload interval"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}
