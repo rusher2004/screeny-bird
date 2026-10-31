@@ -29,7 +29,8 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 | Route | Response |
 | --- | --- |
 | `GET /healthz` | Liveness and the served catalog's size. `503` if the latest catalog reload failed while an older valid catalog is still being served. |
-| `GET /v1/catalog` | The species list: `schema_version`, `generated_at`, and per species its names, slug, approval time, and the paths and SHA-256 of its portrait and display images. |
+| `GET /v1/catalog` | The species list: `schema_version`, `generated_at`, and per species its names, slug, approval time, the paths and SHA-256 of its portrait and display images, and its `derived` screensaver-sized image (`path`, `sha256`, `width`, `height`). |
+| `GET /v1/derived/<path>` | One derived screensaver-sized PNG named by a species' `derived.path`, sent only after its bytes match the recorded checksum. `?sha256=<digest>` works the same way as for assets. |
 | `GET /v1/assets/<path>` | One PNG listed in the catalog, sent only after its bytes match the catalog's checksum. Add `?sha256=<digest>` to make the response cacheable forever. |
 
 Only `GET` and `HEAD` are accepted. Responses carry an `ETag` and answer `If-None-Match`. Browser access from another origin is off unless that exact origin is configured.
@@ -95,7 +96,7 @@ curl localhost:8080/healthz
 curl localhost:8080/v1/catalog
 ```
 
-To pick up new upstream species later, run the sync command again, then derive. The running server notices the change within `reload_interval_seconds`. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
+To pick up new upstream species later, run the sync command again, then derive. The server needs every species to have a derived image, so after a sync it keeps serving the old catalog and `/healthz` reports 503 until derive has run; it notices the finished derive within `reload_interval_seconds`. It also refuses to start until `catalog derive` has run once. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
 
 Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog derive`, `./screeny catalog validate` and `./screeny serve`.
 

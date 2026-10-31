@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -109,18 +110,21 @@ func NewDeriver(store store, progress progress, outDir string, width, height int
 	return Deriver{store: store, progress: progress, outDir: outDir, width: width, height: height}, nil
 }
 
-type indexEntry struct {
+// Entry is one derived image in the index.
+type Entry struct {
 	Path    string `json:"path"`
 	SHA256  string `json:"sha256"`
 	Slug    string `json:"slug"`
 	TaxonID int    `json:"taxon_id"`
 }
 
+// index is the JSON body of the derived index. The field order is the sorted
+// key order.
 type index struct {
-	Height        int          `json:"height"`
-	SchemaVersion int          `json:"schema_version"`
-	Species       []indexEntry `json:"species"`
-	Width         int          `json:"width"`
+	Height        int     `json:"height"`
+	SchemaVersion int     `json:"schema_version"`
+	Species       []Entry `json:"species"`
+	Width         int     `json:"width"`
 }
 
 // Derive writes a derived image for every species in the catalog that lacks
@@ -180,7 +184,7 @@ func (d Deriver) Derive(ctx context.Context) (added int, err error) {
 		return 0, err
 	}
 
-	entries := make([]indexEntry, 0, len(species))
+	entries := make([]Entry, 0, len(species))
 
 	var missing []catalog.Species
 
@@ -244,54 +248,107 @@ func speciesDir(sp catalog.Species) string {
 // derivedPath is where a species' image lives, relative to the derived
 // directory and slash-separated.
 func (d Deriver) derivedPath(sp catalog.Species) string {
-	return fmt.Sprintf("species/%s/%dx%d.png", speciesDir(sp), d.width, d.height)
+	return imagePath(sp.TaxonID, sp.Slug, d.width, d.height)
 }
 
 // readIndex returns the recorded entries by taxon. A directory with no index
 // has recorded nothing.
-func (d Deriver) readIndex() (map[int]indexEntry, error) {
+func (d Deriver) readIndex() (map[int]Entry, error) {
 	raw, err := os.ReadFile(filepath.Join(d.outDir, indexFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		return map[int]indexEntry{}, nil
+		return map[int]Entry{}, nil
 	}
 
 	if err != nil {
 		return nil, fmt.Errorf("reading the derived index: %w", err)
 	}
 
-	var idx index
-
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&idx); err != nil {
-		return nil, fmt.Errorf("decoding the derived index: %w: %w", ErrInvalidIndex, err)
-	}
-
-	if idx.SchemaVersion != schemaVersion {
-		return nil, fmt.Errorf("derived index schema version %d, want %d: %w", idx.SchemaVersion, schemaVersion, ErrInvalidIndex)
+	idx, err := parseIndex(raw)
+	if err != nil {
+		return nil, err
 	}
 
 	if idx.Width != d.width || idx.Height != d.height {
 		return nil, fmt.Errorf("derived images are %dx%d but %dx%d is configured: %w", idx.Width, idx.Height, d.width, d.height, ErrSizeChanged)
 	}
 
-	byTaxon := make(map[int]indexEntry, len(idx.Species))
-
+	byTaxon := make(map[int]Entry, len(idx.Species))
 	for _, e := range idx.Species {
-		if _, dup := byTaxon[e.TaxonID]; dup {
-			return nil, fmt.Errorf("taxon %d appears twice: %w", e.TaxonID, ErrInvalidIndex)
-		}
-
 		byTaxon[e.TaxonID] = e
 	}
 
 	return byTaxon, nil
 }
 
+var (
+	slugPattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+// parseIndex decodes a derived index strictly and checks that it is
+// internally consistent: a known schema, a positive size within bounds, unique
+// taxa, and for each entry a valid slug and checksum and the one path its
+// species and the index's size give it.
+func parseIndex(raw []byte) (index, error) {
+	var idx index
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&idx); err != nil {
+		return index{}, fmt.Errorf("decoding the derived index: %w: %w", ErrInvalidIndex, err)
+	}
+
+	if idx.SchemaVersion != schemaVersion {
+		return index{}, fmt.Errorf("derived index schema version %d, want %d: %w", idx.SchemaVersion, schemaVersion, ErrInvalidIndex)
+	}
+
+	if idx.Width < 1 || idx.Height < 1 || idx.Width > maxDimension || idx.Height > maxDimension {
+		return index{}, fmt.Errorf("derived index size %dx%d is out of bounds: %w", idx.Width, idx.Height, ErrInvalidIndex)
+	}
+
+	seen := make(map[int]bool, len(idx.Species))
+
+	var problems []error
+
+	for _, e := range idx.Species {
+		if seen[e.TaxonID] {
+			problems = append(problems, fmt.Errorf("taxon %d appears twice: %w", e.TaxonID, ErrInvalidIndex))
+
+			continue
+		}
+
+		seen[e.TaxonID] = true
+
+		if !slugPattern.MatchString(e.Slug) {
+			problems = append(problems, fmt.Errorf("taxon %d has the invalid slug %q: %w", e.TaxonID, e.Slug, ErrInvalidIndex))
+		}
+
+		if !sha256Pattern.MatchString(e.SHA256) {
+			problems = append(problems, fmt.Errorf("taxon %d has the invalid checksum %q: %w", e.TaxonID, e.SHA256, ErrInvalidIndex))
+		}
+
+		if want := imagePath(e.TaxonID, e.Slug, idx.Width, idx.Height); e.Path != want {
+			problems = append(problems, fmt.Errorf("taxon %d is recorded at %q, want %q: %w", e.TaxonID, e.Path, want, ErrInvalidIndex))
+		}
+	}
+
+	if err := errors.Join(problems...); err != nil {
+		return index{}, err
+	}
+
+	return idx, nil
+}
+
+// imagePath is where a species' image lives, relative to the derived
+// directory and slash-separated.
+func imagePath(taxonID int, slug string, width, height int) string {
+	return fmt.Sprintf("species/%d-%s/%dx%d.png", taxonID, slug, width, height)
+}
+
 // checkRecorded confirms a recorded image is where its species belongs and
 // still has the recorded checksum.
-func (d Deriver) checkRecorded(sp catalog.Species, e indexEntry) error {
+func (d Deriver) checkRecorded(sp catalog.Species, e Entry) error {
 	if want := d.derivedPath(sp); e.Path != want || e.Slug != sp.Slug {
 		return fmt.Errorf("%s is recorded at %q, want %q: %w", speciesDir(sp), e.Path, want, ErrInvalidIndex)
 	}
@@ -308,31 +365,31 @@ func (d Deriver) checkRecorded(sp catalog.Species, e indexEntry) error {
 	return nil
 }
 
-func (d Deriver) deriveOne(sp catalog.Species) (indexEntry, error) {
+func (d Deriver) deriveOne(sp catalog.Species) (Entry, error) {
 	dir := speciesDir(sp)
 
 	data, err := d.store.ReadAsset(sp.PortraitPath)
 	if err != nil {
-		return indexEntry{}, fmt.Errorf("reading the portrait image of %s: %w", dir, err)
+		return Entry{}, fmt.Errorf("reading the portrait image of %s: %w", dir, err)
 	}
 
 	if got := sha256Hex(data); got != sp.PortraitSHA256 {
-		return indexEntry{}, fmt.Errorf("the portrait image of %s has checksum %s, catalog says %s: %w", dir, got, sp.PortraitSHA256, catalog.ErrChecksumMismatch)
+		return Entry{}, fmt.Errorf("the portrait image of %s has checksum %s, catalog says %s: %w", dir, got, sp.PortraitSHA256, catalog.ErrChecksumMismatch)
 	}
 
 	src, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		return indexEntry{}, fmt.Errorf("decoding the portrait image of %s: %w", dir, err)
+		return Entry{}, fmt.Errorf("decoding the portrait image of %s: %w", dir, err)
 	}
 
 	fitted, err := fit(src, d.width, d.height)
 	if err != nil {
-		return indexEntry{}, fmt.Errorf("fitting the portrait image of %s: %w", dir, err)
+		return Entry{}, fmt.Errorf("fitting the portrait image of %s: %w", dir, err)
 	}
 
 	var out bytes.Buffer
 	if err := png.Encode(&out, fitted); err != nil {
-		return indexEntry{}, fmt.Errorf("encoding the derived image of %s: %w", dir, err)
+		return Entry{}, fmt.Errorf("encoding the derived image of %s: %w", dir, err)
 	}
 
 	rel := d.derivedPath(sp)
@@ -346,28 +403,28 @@ func (d Deriver) deriveOne(sp catalog.Species) (indexEntry, error) {
 		// deterministic, so an identical file is adopted; anything else was
 		// changed by someone and is never overwritten.
 		if !bytes.Equal(existing, out.Bytes()) {
-			return indexEntry{}, fmt.Errorf("%s exists but is not what derive would write: %w", rel, ErrDerivedChanged)
+			return Entry{}, fmt.Errorf("%s exists but is not what derive would write: %w", rel, ErrDerivedChanged)
 		}
 	case errors.Is(err, fs.ErrNotExist):
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return indexEntry{}, fmt.Errorf("creating the derived directory of %s: %w", dir, err)
+			return Entry{}, fmt.Errorf("creating the derived directory of %s: %w", dir, err)
 		}
 
 		if err := fsutil.WriteFileAtomic(target, out.Bytes(), 0o644); err != nil {
-			return indexEntry{}, fmt.Errorf("writing the derived image of %s: %w", dir, err)
+			return Entry{}, fmt.Errorf("writing the derived image of %s: %w", dir, err)
 		}
 	default:
-		return indexEntry{}, fmt.Errorf("inspecting %s: %w", rel, err)
+		return Entry{}, fmt.Errorf("inspecting %s: %w", rel, err)
 	}
 
-	return indexEntry{Path: rel, SHA256: sha256Hex(out.Bytes()), Slug: sp.Slug, TaxonID: sp.TaxonID}, nil
+	return Entry{Path: rel, SHA256: sha256Hex(out.Bytes()), Slug: sp.Slug, TaxonID: sp.TaxonID}, nil
 }
 
 // writeIndex writes the derived index in canonical form: sorted keys, two
 // space indent and a trailing newline.
-func (d Deriver) writeIndex(entries []indexEntry) error {
+func (d Deriver) writeIndex(entries []Entry) error {
 	sorted := slices.Clone(entries)
-	slices.SortFunc(sorted, func(a, b indexEntry) int { return cmp.Compare(a.TaxonID, b.TaxonID) })
+	slices.SortFunc(sorted, func(a, b Entry) int { return cmp.Compare(a.TaxonID, b.TaxonID) })
 
 	raw, err := json.MarshalIndent(index{Height: d.height, SchemaVersion: schemaVersion, Species: sorted, Width: d.width}, "", "  ")
 	if err != nil {

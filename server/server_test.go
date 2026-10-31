@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rusher2004/screeny-bird/catalog"
+	"github.com/rusher2004/screeny-bird/derive"
 	"github.com/rusher2004/screeny-bird/server"
 )
 
@@ -169,6 +170,22 @@ func (c *countingStore) ReadAsset(name string) ([]byte, error) {
 	return c.inner.ReadAsset(name)
 }
 
+// countingDerived wraps the real derived loader and counts image reads.
+type countingDerived struct {
+	inner derive.DirLoader
+	reads *atomic.Int32
+}
+
+func (c countingDerived) Load() (derive.Index, error) { return c.inner.Load() }
+
+func (c countingDerived) IndexVersion() (string, error) { return c.inner.IndexVersion() }
+
+func (c countingDerived) ReadAsset(name string) ([]byte, error) {
+	c.reads.Add(1)
+
+	return c.inner.ReadAsset(name)
+}
+
 // copyTree copies a directory of regular files.
 func copyTree(t *testing.T, from, to string) {
 	t.Helper()
@@ -243,19 +260,46 @@ func rebuild(t *testing.T, dir string) {
 	}
 }
 
+// Derived images in the tests are tiny so deriving stays fast.
+const (
+	derivedWidth  = 64
+	derivedHeight = 48
+)
+
+type quietProgress struct{}
+
+func (quietProgress) Planned(int, int)         {}
+func (quietProgress) Derived(int, int, string) {}
+
+// deriveInto makes the derived images for every species in store.
+func deriveInto(t *testing.T, store catalog.DirLoader, dir string) {
+	t.Helper()
+
+	deriver, err := derive.NewDeriver(store, quietProgress{}, dir, derivedWidth, derivedHeight)
+	if err != nil {
+		t.Fatalf("NewDeriver() error = %v", err)
+	}
+
+	if _, err := deriver.Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() error = %v", err)
+	}
+}
+
 // harness runs a server against a real directory over in-memory pipes.
 type harness struct {
-	t         *testing.T
-	dir       string
-	store     *countingStore
-	provider  *listenerProvider
-	ticker    *fakeTicker
-	log       *fakeLog
-	client    *http.Client
-	cancel    context.CancelFunc
-	done      chan error
-	opts      server.Options
-	serveOnce sync.Once
+	t            *testing.T
+	dir          string
+	derivedDir   string
+	derivedReads atomic.Int32
+	store        *countingStore
+	provider     *listenerProvider
+	ticker       *fakeTicker
+	log          *fakeLog
+	client       *http.Client
+	cancel       context.CancelFunc
+	done         chan error
+	opts         server.Options
+	serveOnce    sync.Once
 }
 
 // newHarness prepares a server but does not start it.
@@ -269,15 +313,24 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 		t.Fatalf("NewDirLoader() error = %v", err)
 	}
 
+	derivedDir := t.TempDir()
+	deriveInto(t, loader, derivedDir)
+
+	derived, err := derive.NewDirLoader(derivedDir)
+	if err != nil {
+		t.Fatalf("derive.NewDirLoader() error = %v", err)
+	}
+
 	pipe := newPipeListener()
 	h := &harness{
-		t:        t,
-		dir:      dir,
-		store:    &countingStore{inner: loader},
-		provider: &listenerProvider{listener: pipe},
-		ticker:   &fakeTicker{ticks: make(chan struct{}, 4)},
-		log:      &fakeLog{},
-		done:     make(chan error, 1),
+		t:          t,
+		dir:        dir,
+		derivedDir: derivedDir,
+		store:      &countingStore{inner: loader},
+		provider:   &listenerProvider{listener: pipe},
+		ticker:     &fakeTicker{ticks: make(chan struct{}, 4)},
+		log:        &fakeLog{},
+		done:       make(chan error, 1),
 		client: &http.Client{
 			Transport: &http.Transport{DialContext: pipe.dial, DisableKeepAlives: true},
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -289,6 +342,7 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 
 	h.opts = server.Options{
 		Store:             h.store,
+		Derived:           countingDerived{inner: derived, reads: &h.derivedReads},
 		Listener:          h.provider,
 		Ticker:            h.ticker,
 		Log:               h.log,
@@ -301,6 +355,13 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 	}
 
 	return h
+}
+
+// rederive brings the derived images up to date with the catalog directory.
+func (h *harness) rederive() {
+	h.t.Helper()
+
+	deriveInto(h.t, h.store.inner, h.derivedDir)
 }
 
 // start runs Serve in the background; stop is registered for cleanup.
@@ -441,6 +502,7 @@ func TestNewRequiresEveryOption(t *testing.T) {
 
 	tests := map[string]func(o server.Options) server.Options{
 		"store":           func(o server.Options) server.Options { o.Store = nil; return o },
+		"derived store":   func(o server.Options) server.Options { o.Derived = nil; return o },
 		"listener":        func(o server.Options) server.Options { o.Listener = nil; return o },
 		"ticker":          func(o server.Options) server.Options { o.Ticker = nil; return o },
 		"log":             func(o server.Options) server.Options { o.Log = nil; return o },
@@ -479,7 +541,7 @@ func TestNewReportsEveryProblemTogether(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrInvalidServer", err)
 	}
 
-	for _, want := range []string{"store", "listener", "ticker", "log", "version", "allowed origins", "read header timeout", "reload interval"} {
+	for _, want := range []string{"store", "derived store", "listener", "ticker", "log", "version", "allowed origins", "read header timeout", "reload interval"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}
@@ -521,6 +583,100 @@ func TestServeRefusesToStartOnAnInvalidCatalog(t *testing.T) {
 	if n := h.provider.calls.Load(); n != 0 {
 		t.Fatalf("Serve() opened the listener %d times before the catalog validated, want 0", n)
 	}
+}
+
+func TestServeRefusesToStartWhenDeriveHasNotCaughtUp(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren)
+
+	// The catalog gains a species that has no derived image yet.
+	addSpecies(t, h.dir, finch)
+	rebuild(t, h.dir)
+
+	srv, err := server.New(h.opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = srv.Serve(context.Background())
+	if !errors.Is(err, server.ErrDerivedMismatch) || !strings.Contains(err.Error(), finch) {
+		t.Fatalf("Serve() error = %v, want ErrDerivedMismatch naming %s", err, finch)
+	}
+
+	if n := h.provider.calls.Load(); n != 0 {
+		t.Fatalf("Serve() opened the listener %d times, want 0", n)
+	}
+}
+
+func TestServeRefusesToStartWithoutADerivedIndex(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren)
+
+	if err := os.Remove(filepath.Join(h.derivedDir, "index.json")); err != nil {
+		t.Fatalf("removing derived index: %v", err)
+	}
+
+	srv, err := server.New(h.opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if err := srv.Serve(context.Background()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Serve() error = %v, want fs.ErrNotExist", err)
+	}
+}
+
+func TestServeRefusesADerivedImageForASpeciesTheCatalogLacks(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren, finch)
+
+	// Rebuild the catalog without the finch, leaving its derived image behind.
+	if err := os.RemoveAll(filepath.Join(h.dir, "species", finch)); err != nil {
+		t.Fatalf("removing species: %v", err)
+	}
+
+	rebuild(t, h.dir)
+
+	srv, err := server.New(h.opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if err := srv.Serve(context.Background()); !errors.Is(err, server.ErrDerivedMismatch) || !strings.Contains(err.Error(), "1002") {
+		t.Fatalf("Serve() error = %v, want ErrDerivedMismatch naming taxon 1002", err)
+	}
+}
+
+func TestReloadWaitsForDeriveAndRecoversWhenItFinishes(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+
+	// Sync adds a species; derive has not run yet, so the reload fails and the
+	// last good catalog keeps being served.
+	addSpecies(t, h.dir, finch)
+	rebuild(t, h.dir)
+	h.ticker.fire()
+
+	eventually(t, "the reload to fail while derive is behind", func() bool {
+		return h.get("/healthz").status == http.StatusServiceUnavailable
+	})
+
+	if got := h.catalogTaxa(); !slices.Equal(got, []int{1001}) {
+		t.Fatalf("taxa = %v while derive is behind, want the last good [1001]", got)
+	}
+
+	// Derive finishes without the catalog index changing: only the derived
+	// index is replaced, and that alone must trigger the next reload.
+	h.rederive()
+	h.ticker.fire()
+
+	eventually(t, "recovery once derive has caught up", func() bool {
+		return h.get("/healthz").status == http.StatusOK && slices.Equal(h.catalogTaxa(), []int{1001, 1002})
+	})
 }
 
 func TestServeReportsAListenerFailure(t *testing.T) {
@@ -578,6 +734,7 @@ func TestReloadPicksUpNewSpecies(t *testing.T) {
 
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
+	h.rederive()
 	h.ticker.fire()
 
 	eventually(t, "the new species to be served", func() bool {
@@ -617,6 +774,7 @@ func TestAFailedReloadKeepsTheLastGoodCatalogAndSaysSo(t *testing.T) {
 	// by deleting the file: the rebuild fails, so write the index by hand.
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
+	h.rederive()
 
 	if err := os.Remove(filepath.Join(h.dir, "species", finch, "portrait.png")); err != nil {
 		t.Fatalf("removing portrait: %v", err)
@@ -648,6 +806,7 @@ func TestAFailedReloadKeepsTheLastGoodCatalogAndSaysSo(t *testing.T) {
 	// Repairing the catalog recovers on the next change.
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
+	h.rederive()
 	h.ticker.fire()
 
 	eventually(t, "recovery", func() bool {
@@ -662,6 +821,7 @@ func TestAFailedReloadIsNotRetriedUntilTheIndexChanges(t *testing.T) {
 
 	addSpecies(t, h.dir, finch)
 	rebuild(t, h.dir)
+	h.rederive()
 
 	if err := os.Remove(filepath.Join(h.dir, "species", finch, "portrait.png")); err != nil {
 		t.Fatalf("removing portrait: %v", err)

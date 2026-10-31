@@ -15,6 +15,7 @@ const (
 	healthPath  = "/healthz"
 	catalogPath = "/v1/catalog"
 	assetsPath  = "/v1/assets/"
+	derivedPath = "/v1/derived/"
 )
 
 const (
@@ -34,6 +35,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc(catalogPath, methodNotAllowed)
 	mux.HandleFunc("GET "+assetsPath+"{path...}", s.withCORS(s.asset))
 	mux.HandleFunc(assetsPath+"{path...}", methodNotAllowed)
+	mux.HandleFunc("GET "+derivedPath+"{path...}", s.withCORS(s.derivedImage))
+	mux.HandleFunc(derivedPath+"{path...}", methodNotAllowed)
 	mux.HandleFunc("/", notFound)
 
 	return s.logged(nosniff(mux))
@@ -186,10 +189,25 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 // the SHA-256 the catalog declares. A file that fails the check is never sent.
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	snap := s.state.Load()
+
+	s.serveImage(w, r, snap.assets, s.opts.Store.ReadAsset)
+}
+
+// derivedImage serves one derived image the derived index lists, after
+// checking its bytes against the SHA-256 the index records.
+func (s *Server) derivedImage(w http.ResponseWriter, r *http.Request) {
+	snap := s.state.Load()
+
+	s.serveImage(w, r, snap.derived, s.opts.Derived.ReadAsset)
+}
+
+// serveImage serves the image the request names if listed maps it to a
+// checksum, reading it with read and refusing to send bytes that do not match.
+func (s *Server) serveImage(w http.ResponseWriter, r *http.Request, listed map[string]string, read func(string) ([]byte, error)) {
 	name := r.PathValue("path")
 
-	want, listed := snap.assets[name]
-	if !listed {
+	want, ok := listed[name]
+	if !ok {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
 
 		return
@@ -213,7 +231,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.opts.Store.ReadAsset(name)
+	data, err := read(name)
 	if err != nil {
 		unavailable(w)
 

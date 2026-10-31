@@ -8,12 +8,14 @@ import (
 
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/config"
+	"github.com/rusher2004/screeny-bird/derive"
 	"github.com/rusher2004/screeny-bird/server"
 )
 
-// newServer builds the HTTP server over the catalog in store. The listener, the
+// newServer builds the HTTP server over the catalog in store and its derived
+// images in derived. The listener, the
 // real clock ticker and the request logger are main's choices.
-func newServer(cfg config.Config, version string, store catalog.DirLoader, logger *slog.Logger) (*server.Server, error) {
+func newServer(cfg config.Config, version string, store catalog.DirLoader, derived derive.DirLoader, logger *slog.Logger) (*server.Server, error) {
 	listener, err := server.NewTCPListener(cfg.ListenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("wiring the HTTP server: %w", err)
@@ -21,6 +23,7 @@ func newServer(cfg config.Config, version string, store catalog.DirLoader, logge
 
 	srv, err := server.New(server.Options{
 		Store:             store,
+		Derived:           derived,
 		Listener:          listener,
 		Ticker:            server.TimeTicker{},
 		Log:               requestLogger{logger: logger},

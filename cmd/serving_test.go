@@ -6,6 +6,7 @@ import (
 
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/config"
+	"github.com/rusher2004/screeny-bird/derive"
 )
 
 func TestNewServerAndProberBuildFromAValidConfig(t *testing.T) {
@@ -18,7 +19,12 @@ func TestNewServerAndProberBuildFromAValidConfig(t *testing.T) {
 		t.Fatalf("NewDirLoader() error = %v", err)
 	}
 
-	if _, err := newServer(cfg, "1.2.3", loader, slog.New(slog.DiscardHandler)); err != nil {
+	derived, err := derive.NewDirLoader(cfg.DerivedDir)
+	if err != nil {
+		t.Fatalf("derive.NewDirLoader() error = %v", err)
+	}
+
+	if _, err := newServer(cfg, "1.2.3", loader, derived, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("newServer() error = %v", err)
 	}
 
@@ -39,7 +45,12 @@ func TestNewServerRejectsUnusableSettings(t *testing.T) {
 		t.Fatalf("NewDirLoader() error = %v", err)
 	}
 
-	if _, err := newServer(cfg, "1.2.3", loader, slog.New(slog.DiscardHandler)); err == nil {
+	derived, err := derive.NewDirLoader(cfg.DerivedDir)
+	if err != nil {
+		t.Fatalf("derive.NewDirLoader() error = %v", err)
+	}
+
+	if _, err := newServer(cfg, "1.2.3", loader, derived, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("newServer() with a blank address and a wildcard origin error = nil, want failure")
 	}
 }
