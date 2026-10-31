@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,12 +55,18 @@ func (f *fakeSleeper) Sleep(_ context.Context, d time.Duration) error {
 	return f.err
 }
 
+type fakeObserver struct{ seen []string }
+
+func (o *fakeObserver) Retrying(attempt, attempts int, delay time.Duration, err error) {
+	o.seen = append(o.seen, fmt.Sprintf("%d/%d %v %v", attempt, attempts, delay, err))
+}
+
 var errStall = fmt.Errorf("stalled: %w", upstream.ErrTransient)
 
 func newRetrier(t *testing.T, inner *scriptedFetcher, sleeper *fakeSleeper, attempts int) upstream.Retrier {
 	t.Helper()
 
-	retrier, err := upstream.NewRetrier(inner, attempts, 3*time.Second, sleeper)
+	retrier, err := upstream.NewRetrier(inner, attempts, 3*time.Second, sleeper, &fakeObserver{})
 	if err != nil {
 		t.Fatalf("NewRetrier() error = %v", err)
 	}
@@ -94,6 +101,26 @@ func TestRetrierRetriesTransientFailuresUntilOneSucceeds(t *testing.T) {
 
 	if len(sleeper.slept) != 2 || sleeper.slept[0] != 3*time.Second || sleeper.slept[1] != 3*time.Second {
 		t.Errorf("slept %v, want 3s before each of the two retries", sleeper.slept)
+	}
+}
+
+func TestRetrierTellsTheObserverBeforeEachRetry(t *testing.T) {
+	t.Parallel()
+
+	observer := &fakeObserver{}
+
+	retrier, err := upstream.NewRetrier(&scriptedFetcher{results: []error{errStall, errStall, nil}}, 3, 3*time.Second, &fakeSleeper{}, observer)
+	if err != nil {
+		t.Fatalf("NewRetrier() error = %v", err)
+	}
+
+	if _, err := retrier.Fetch(context.Background(), commit, "catalog/a.png"); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	want := []string{"1/3 3s " + errStall.Error(), "2/3 3s " + errStall.Error()}
+	if !slices.Equal(observer.seen, want) {
+		t.Fatalf("observer saw %q, want %q", observer.seen, want)
 	}
 }
 
@@ -190,7 +217,7 @@ func TestRetrierRetriesRefResolutionToo(t *testing.T) {
 func TestNewRetrierRejectsBadArgumentsTogether(t *testing.T) {
 	t.Parallel()
 
-	_, err := upstream.NewRetrier(nil, 0, 0, nil)
+	_, err := upstream.NewRetrier(nil, 0, 0, nil, nil)
 	if !errors.Is(err, upstream.ErrInvalidSource) {
 		t.Fatalf("NewRetrier() error = %v, want ErrInvalidSource", err)
 	}
@@ -201,7 +228,7 @@ func TestNewRetrierRejectsBadArgumentsTogether(t *testing.T) {
 		}
 	}
 
-	if _, err := upstream.NewRetrier(&scriptedFetcher{results: []error{nil}}, 1, time.Second, &fakeSleeper{}); err != nil {
+	if _, err := upstream.NewRetrier(&scriptedFetcher{results: []error{nil}}, 1, time.Second, &fakeSleeper{}, &fakeObserver{}); err != nil {
 		t.Fatalf("NewRetrier() with valid arguments error = %v", err)
 	}
 }

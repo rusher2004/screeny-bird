@@ -238,7 +238,7 @@ func TestReport(t *testing.T) {
 func TestNewSyncerBuildsFromAValidConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newSyncer(validConfig(t.TempDir())); err != nil {
+	if _, err := newSyncer(validConfig(t.TempDir()), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("newSyncer() error = %v", err)
 	}
 }
@@ -250,7 +250,7 @@ func TestNewSyncerRejectsAnInvalidUpstream(t *testing.T) {
 	cfg.UpstreamRepo = "not a repo"
 	cfg.UpstreamRef = ""
 
-	_, err := newSyncer(cfg)
+	_, err := newSyncer(cfg, slog.New(slog.DiscardHandler))
 	if !errors.Is(err, upstream.ErrInvalidSource) {
 		t.Fatalf("newSyncer() error = %v, want upstream.ErrInvalidSource", err)
 	}
@@ -263,7 +263,7 @@ func TestNewSyncerRejectsUnusableRetrySettings(t *testing.T) {
 	cfg.UpstreamAttempts = 0
 	cfg.UpstreamRetryDelaySeconds = 0
 
-	_, err := newSyncer(cfg)
+	_, err := newSyncer(cfg, slog.New(slog.DiscardHandler))
 	if !errors.Is(err, upstream.ErrInvalidSource) {
 		t.Fatalf("newSyncer() error = %v, want upstream.ErrInvalidSource", err)
 	}

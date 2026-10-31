@@ -65,7 +65,7 @@ Copy the example settings. `config.local.toml` is gitignored, and its `listen_ad
 cp config.example.toml config.local.toml
 ```
 
-Fetch the catalog into the stack's data volume. The first sync downloads the whole upstream catalog, about 1.1 GB, so it takes several minutes. A sync that fails publishes nothing but keeps what it downloaded, so run it again and it resumes where it stopped. That staging can take up to the same space in the data volume until a sync succeeds.
+Fetch the catalog into the stack's data volume. The first sync downloads the whole upstream catalog, about 1.1 GB, so it takes several minutes. A sync that fails publishes nothing but keeps what it downloaded, so run it again and it resumes where it stopped. Progress goes to stderr as it runs: the upstream commit, how many species are missing, one line per species staged (`reused=true` for ones an earlier run already downloaded), and a warning before each retry. That staging can take up to the same space in the data volume until a sync succeeds.
 
 ```bash
 VERSION="$(cat VERSION)" docker compose run --rm sync

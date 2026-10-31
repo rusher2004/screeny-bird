@@ -69,7 +69,7 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 		return fmt.Errorf("creating catalog loader: %w", err)
 	}
 
-	syncer, err := newSyncer(cfg)
+	syncer, err := newSyncer(cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 // configured store. The HTTP client has an explicit configuration: no proxy
 // lookup, no redirects and the configured timeout, so nothing outside the
 // settings decides where a request goes.
-func newSyncer(cfg config.Config) (mirror.Syncer, error) {
+func newSyncer(cfg config.Config, logger *slog.Logger) (mirror.Syncer, error) {
 	timeout := time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second
 
 	client := &http.Client{
@@ -124,12 +124,13 @@ func newSyncer(cfg config.Config) (mirror.Syncer, error) {
 		cfg.UpstreamAttempts,
 		time.Duration(cfg.UpstreamRetryDelaySeconds)*time.Second,
 		upstream.TimerSleeper{},
+		syncLogger{logger: logger},
 	)
 	if err != nil {
 		return mirror.Syncer{}, fmt.Errorf("creating upstream retrier: %w", err)
 	}
 
-	syncer, err := mirror.NewSyncer(retrier, cfg.UpstreamRepo, cfg.UpstreamRef, cfg.CatalogDir, cfg.WorkDir)
+	syncer, err := mirror.NewSyncer(retrier, syncLogger{logger: logger}, cfg.UpstreamRepo, cfg.UpstreamRef, cfg.CatalogDir, cfg.WorkDir)
 	if err != nil {
 		return mirror.Syncer{}, fmt.Errorf("creating syncer: %w", err)
 	}

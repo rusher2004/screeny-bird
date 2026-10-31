@@ -220,10 +220,35 @@ func newDirs(t *testing.T) dirs {
 	return d
 }
 
+// recordingProgress keeps what a syncer reports, one line per event.
+type recordingProgress struct{ events []string }
+
+func (r *recordingProgress) Resolved(commit string) {
+	r.events = append(r.events, "resolved "+commit)
+}
+
+func (r *recordingProgress) Planned(upstream, missing int) {
+	r.events = append(r.events, fmt.Sprintf("planned %d %d", upstream, missing))
+}
+
+func (r *recordingProgress) Staged(done, total int, species string, reused bool) {
+	r.events = append(r.events, fmt.Sprintf("staged %d/%d %s reused=%t", done, total, species, reused))
+}
+
+func (r *recordingProgress) Validating() { r.events = append(r.events, "validating") }
+
+func (r *recordingProgress) Publishing() { r.events = append(r.events, "publishing") }
+
 func newSyncer(t *testing.T, source *fakeSource, d dirs) mirror.Syncer {
 	t.Helper()
 
-	syncer, err := mirror.NewSyncer(source, "veteranbv/inky-bird-frame", "main", d.store, d.work)
+	return newSyncerReporting(t, source, &recordingProgress{}, d)
+}
+
+func newSyncerReporting(t *testing.T, source *fakeSource, progress *recordingProgress, d dirs) mirror.Syncer {
+	t.Helper()
+
+	syncer, err := mirror.NewSyncer(source, progress, "veteranbv/inky-bird-frame", "main", d.store, d.work)
 	if err != nil {
 		t.Fatalf("NewSyncer() error = %v", err)
 	}
@@ -751,17 +776,17 @@ func TestSyncRefusesToRunTwiceAtOnce(t *testing.T) {
 func TestNewSyncerRequiresEveryArgument(t *testing.T) {
 	t.Parallel()
 
-	if _, err := mirror.NewSyncer(nil, "", "", "", ""); !errors.Is(err, mirror.ErrInvalidSyncer) {
+	if _, err := mirror.NewSyncer(nil, nil, "", "", "", ""); !errors.Is(err, mirror.ErrInvalidSyncer) {
 		t.Fatalf("NewSyncer() error = %v, want ErrInvalidSyncer", err)
 	} else {
-		for _, name := range []string{"source", "repo", "ref", "store", "work"} {
+		for _, name := range []string{"source", "progress", "repo", "ref", "store", "work"} {
 			if !strings.Contains(err.Error(), name) {
 				t.Errorf("error %q does not name %s", err, name)
 			}
 		}
 	}
 
-	if _, err := mirror.NewSyncer(&fakeSource{}, "a/b", "main", "/s", "/w"); err != nil {
+	if _, err := mirror.NewSyncer(&fakeSource{}, &recordingProgress{}, "a/b", "main", "/s", "/w"); err != nil {
 		t.Fatalf("NewSyncer() with every argument error = %v", err)
 	}
 }
@@ -850,6 +875,52 @@ func TestSyncResumesAfterAFailureWithoutRefetchingVerifiedSpecies(t *testing.T) 
 		if name != "upstream.json" && name != "sync.lock" {
 			t.Errorf("work directory kept %q after a successful sync", name)
 		}
+	}
+}
+
+func TestSyncReportsEachStepAndWhichSpeciesWereReused(t *testing.T) {
+	t.Parallel()
+
+	source := newUpstream(t, wren, finch, bunting)
+	d := newDirs(t)
+
+	broken := speciesPath(bunting, "display.png")
+	saved := source.files[broken]
+	delete(source.files, broken)
+
+	first := &recordingProgress{}
+	if _, _, err := newSyncerReporting(t, source, first, d).Sync(context.Background()); err == nil {
+		t.Fatal("first Sync() error = nil, want failure")
+	}
+
+	wantFirst := []string{
+		"resolved " + commit,
+		"planned 3 3",
+		"staged 1/3 " + wren.dir() + " reused=false",
+		"staged 2/3 " + finch.dir() + " reused=false",
+	}
+	if !slices.Equal(first.events, wantFirst) {
+		t.Fatalf("first sync reported %q, want %q", first.events, wantFirst)
+	}
+
+	source.files[broken] = saved
+
+	second := &recordingProgress{}
+	if _, _, err := newSyncerReporting(t, source, second, d).Sync(context.Background()); err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+
+	wantSecond := []string{
+		"resolved " + commit,
+		"planned 3 3",
+		"staged 1/3 " + wren.dir() + " reused=true",
+		"staged 2/3 " + finch.dir() + " reused=true",
+		"staged 3/3 " + bunting.dir() + " reused=false",
+		"validating",
+		"publishing",
+	}
+	if !slices.Equal(second.events, wantSecond) {
+		t.Fatalf("second sync reported %q, want %q", second.events, wantSecond)
 	}
 }
 
