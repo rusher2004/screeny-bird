@@ -70,6 +70,8 @@ paths:
           headers:
             ETag:
               $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControlRevalidate"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
   /v1/openapi.yaml:
@@ -98,6 +100,8 @@ paths:
           headers:
             ETag:
               $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControlRevalidate"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
   /v1/assets/{path}:
@@ -172,10 +176,12 @@ components:
         pattern: "^[0-9a-f]{64}$"
   headers:
     ETag:
+      required: true
       description: A strong validator. For images it is the image's SHA-256 in quotes.
       schema:
         type: string
     CacheControlRevalidate:
+      required: true
       description: "`no-cache`: store it, but revalidate before reuse."
       schema:
         type: string
@@ -186,6 +192,7 @@ components:
         ETag:
           $ref: "#/components/headers/ETag"
         Cache-Control:
+          required: true
           description: "`public, max-age=31536000, immutable` when `sha256` matches the image, otherwise `no-cache`."
           schema:
             type: string
@@ -199,6 +206,10 @@ components:
       headers:
         ETag:
           $ref: "#/components/headers/ETag"
+        Cache-Control:
+          description: Same as on the 200 response.
+          schema:
+            type: string
     NotFound:
       description: The path is not an image this server lists.
       content:
@@ -209,6 +220,7 @@ components:
       description: Only GET and HEAD are accepted.
       headers:
         Allow:
+          required: true
           description: "`GET, HEAD`"
           schema:
             type: string
@@ -225,6 +237,7 @@ components:
   schemas:
     Health:
       type: object
+      additionalProperties: false
       required: [ok, version, species]
       properties:
         ok:
@@ -247,6 +260,7 @@ components:
           description: Present only while the latest reload failed.
     Catalog:
       type: object
+      additionalProperties: false
       required: [generated_at, schema_version, species]
       properties:
         generated_at:
@@ -262,6 +276,7 @@ components:
             $ref: "#/components/schemas/Species"
     Species:
       type: object
+      additionalProperties: false
       required:
         - approved_at
         - common_name
@@ -303,6 +318,7 @@ components:
           $ref: "#/components/schemas/Sha256"
     DerivedImage:
       type: object
+      additionalProperties: false
       required: [height, path, sha256, width]
       properties:
         path:
@@ -322,6 +338,7 @@ components:
       description: A SHA-256 digest in lowercase hex.
     Error:
       type: object
+      additionalProperties: false
       required: [ok, error]
       properties:
         ok:

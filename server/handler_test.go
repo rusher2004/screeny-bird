@@ -682,13 +682,36 @@ func (h *harness) conforms(method, template, path string, headers map[string]str
 		Status: resp.status,
 		Header: resp.header,
 		Body:   io.NopCloser(bytes.NewReader(resp.body)),
+		// A status the spec does not list is a mismatch, not a pass.
+		Options: &openapi3filter.Options{IncludeResponseStatus: true},
 	}
 
 	if err := openapi3filter.ValidateResponse(context.Background(), input); err != nil {
 		h.t.Fatalf("%s %s = %d does not match the spec: %v", method, path, resp.status, err)
 	}
 
+	// ValidateResponse skips 304 and HEAD responses entirely, so check the
+	// headers the spec requires for this status ourselves.
+	h.requireDeclaredHeaders(item.Get, resp, method, path)
+
 	return resp
+}
+
+// requireDeclaredHeaders fails when a response lacks a header the spec marks
+// required for its status.
+func (h *harness) requireDeclaredHeaders(op *openapi3.Operation, resp response, method, path string) {
+	h.t.Helper()
+
+	ref := op.Responses.Status(resp.status)
+	if ref == nil || ref.Value == nil {
+		h.t.Fatalf("%s %s = %d, which the spec does not declare", method, path, resp.status)
+	}
+
+	for name, header := range ref.Value.Headers {
+		if header.Value != nil && header.Value.Required && resp.header.Get(name) == "" {
+			h.t.Errorf("%s %s = %d is missing the required header %s", method, path, resp.status, name)
+		}
+	}
 }
 
 func TestResponsesMatchTheSpec(t *testing.T) {
@@ -713,6 +736,9 @@ func TestResponsesMatchTheSpec(t *testing.T) {
 	}
 
 	h.conforms(http.MethodGet, "/v1/openapi.yaml", "/v1/openapi.yaml", map[string]string{"If-None-Match": specResp.header.Get("ETag")}, http.StatusNotModified)
+
+	h.conforms(http.MethodHead, "/v1/catalog", "/v1/catalog", nil, http.StatusOK)
+	h.conforms(http.MethodHead, "/v1/derived/{path}", derived, nil, http.StatusOK)
 
 	h.conforms(http.MethodGet, "/v1/assets/{path}", portrait, nil, http.StatusOK)
 	h.conforms(http.MethodGet, "/v1/assets/{path}", portrait+"?sha256="+portraitDigest, nil, http.StatusOK)
