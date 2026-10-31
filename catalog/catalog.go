@@ -151,12 +151,11 @@ func load(fsys fs.FS) (*Catalog, error) {
 
 	sortSpecies(species)
 
-	loaded := &Catalog{species: species}
-	if err := checkIndex(fsys, loaded.Index()); err != nil {
+	if err := checkIndex(fsys, indexOf(species)); err != nil {
 		return nil, fmt.Errorf("checking %s: %w", indexFile, err)
 	}
 
-	return loaded, nil
+	return &Catalog{species: species}, nil
 }
 
 func sortSpecies(species []Species) {

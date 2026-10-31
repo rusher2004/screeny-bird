@@ -69,7 +69,7 @@ When a change affects commands, flags, exit codes or config keys, update `README
 | `commands/` | urfave/cli v3 command tree. `Run` returns every error. Declares the `CatalogLoader` it needs and discovers the build version. |
 | `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
 | `config/` | `Config` and its loaders. `NewTOMLLoader(path)` returns a `TOMLLoader` whose `Load()` reads the settings strictly from that TOML file: every setting required, unknown keys rejected, no defaults. |
-| `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `Load()` validates the whole catalog tree in that directory and returns the species and the canonical index, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
+| `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `Load()` validates the whole catalog tree in that directory, including that `index.json` matches the manifests, and returns the species, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |
 | `derive/` | (planned, M3) Deterministic screensaver-sized image derivatives. |
