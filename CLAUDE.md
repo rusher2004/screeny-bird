@@ -61,7 +61,7 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 | Only catalog images and derived images the indexes list are served, and only after their bytes match the recorded SHA-256; a tampered, missing or symlinked file is a 503, never sent | `server`, `catalog`, `derive` tests |
 | GET and HEAD only (405 otherwise); `nosniff` on every response; CORS only for exactly listed origins, never a wildcard or credentials, never on `/healthz`; the catalog response has exactly the documented fields | `server` tests |
 | Derived images are written only from catalog images whose bytes match the catalog's SHA-256, are deterministic, and are never replaced: a changed size or a recorded image that no longer matches its checksum is an error | `derive` tests |
-| Every response the server gives matches `api/openapi.yaml`: status, headers and body shape | `server` tests (contract), `api` tests |
+| Every response the server gives matches `api/openapi.yaml`: a documented status, every header the document marks required (including on 304 and HEAD), and exactly the documented body fields; every route the server declares is in the document and every documented path is exercised | `server` tests (contract), `api` tests, `tools/repoaudit` `TestRepository` |
 | A catalog or derived index that does not validate, or a derived image that contradicts the catalog, stops the server before it listens; a failed reload keeps serving the last validated catalog and `/healthz` reports it with a 503 | `server` tests |
 
 ### Docs
@@ -74,7 +74,7 @@ When a change affects commands, flags, exit codes, config keys or the HTTP API, 
 | --- | --- |
 | `cmd/` | `main`. Loads the settings file, constructs every dependency from it, owns signals, the request logger and the sync and derive progress loggers, runs `commands`, prints the returned error once and maps the exit code. |
 | `commands/` | urfave/cli v3 command tree. `Run` returns every error. Declares the catalog loader, syncer, server and prober it needs; the version is passed in. |
-| `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
+| `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults, and server routes missing from `api/openapi.yaml`. |
 | `config/` | `Config` and its loaders. `NewTOMLLoader(path)` returns a `TOMLLoader` whose `Load()` reads the settings strictly from that TOML file: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `RebuildIndex()` validates the tree and atomically writes the canonical `index.json`, and whose `Load()` validates the whole catalog tree in that directory, including that `index.json` matches the manifests, and returns the species, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
 | `api/` | `openapi.yaml`, the OpenAPI 3.0 contract for the HTTP API, embedded as `api.Spec` and served by the server at `/v1/openapi.yaml`. Clients are written against it. Change it in the same commit as any route, field, header or status code change; server tests validate real responses against it. |

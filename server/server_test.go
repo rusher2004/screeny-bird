@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -292,15 +294,17 @@ type harness struct {
 	dir          string
 	derivedDir   string
 	derivedReads atomic.Int32
-	store        *countingStore
-	provider     *listenerProvider
-	ticker       *fakeTicker
-	log          *fakeLog
-	client       *http.Client
-	cancel       context.CancelFunc
-	done         chan error
-	opts         server.Options
-	serveOnce    sync.Once
+	// covered records the spec paths conforms has checked.
+	covered   map[string]bool
+	store     *countingStore
+	provider  *listenerProvider
+	ticker    *fakeTicker
+	log       *fakeLog
+	client    *http.Client
+	cancel    context.CancelFunc
+	done      chan error
+	opts      server.Options
+	serveOnce sync.Once
 }
 
 // newHarness prepares a server but does not start it.
@@ -327,6 +331,7 @@ func newHarness(t *testing.T, origins []string, species ...string) *harness {
 		t:          t,
 		dir:        dir,
 		derivedDir: derivedDir,
+		covered:    map[string]bool{},
 		store:      &countingStore{inner: loader},
 		provider:   &listenerProvider{listener: pipe},
 		ticker:     &fakeTicker{ticks: make(chan struct{}, 4)},
@@ -533,6 +538,31 @@ func TestNewRequiresEveryOption(t *testing.T) {
 
 	if _, err := server.New(h.opts); err != nil {
 		t.Fatalf("New() with every option error = %v", err)
+	}
+}
+
+func TestTheServerKeepsItsOwnCopyOfTheSpec(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren)
+	spec := slices.Clone(api.Spec)
+	h.opts.Spec = spec
+
+	h.start()
+
+	// Changing the caller's slice after New must not change what is served.
+	for i := range spec {
+		spec[i] = 'X'
+	}
+
+	resp := h.get("/v1/openapi.yaml")
+	if string(resp.body) != string(api.Spec) {
+		t.Fatal("the served spec changed when the caller's slice did")
+	}
+
+	digest := sha256.Sum256(resp.body)
+	if want := `"` + hex.EncodeToString(digest[:]) + `"`; resp.header.Get("ETag") != want {
+		t.Errorf("ETag = %q, want %q for the bytes served", resp.header.Get("ETag"), want)
 	}
 }
 

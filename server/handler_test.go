@@ -664,6 +664,8 @@ func (h *harness) conforms(method, template, path string, headers map[string]str
 		h.t.Fatalf("the spec has no GET %s", template)
 	}
 
+	h.covered[template] = true
+
 	resp := h.do(method, path, headers)
 	if resp.status != wantStatus {
 		h.t.Fatalf("%s %s = %d, want %d", method, path, resp.status, wantStatus)
@@ -762,6 +764,14 @@ func TestResponsesMatchTheSpec(t *testing.T) {
 			t.Errorf("POST %s: Allow = %q, want %q", route.path, resp.header.Get("Allow"), "GET, HEAD")
 		}
 	}
+
+	// Every path the spec documents was exercised, so a documented route the
+	// server does not serve, or one this test forgot, fails here.
+	for template := range loadSpec(t).Paths.Map() {
+		if !h.covered[template] {
+			t.Errorf("the spec documents %s but this test never requested it", template)
+		}
+	}
 }
 
 func TestUnavailableAndFailingResponsesMatchTheSpec(t *testing.T) {
@@ -794,4 +804,19 @@ func TestUnavailableAndFailingResponsesMatchTheSpec(t *testing.T) {
 	h.conforms(http.MethodGet, "/healthz", "/healthz", nil, http.StatusServiceUnavailable)
 	h.conforms(http.MethodGet, "/v1/derived/{path}", derivedURL(wren), nil, http.StatusServiceUnavailable)
 	h.conforms(http.MethodGet, "/v1/assets/{path}", "/v1/assets/species/"+wren+"/display.png", nil, http.StatusServiceUnavailable)
+}
+
+func TestEncodedSlashesInImagePathsAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+
+	for _, path := range []string{
+		"/v1/derived/species%2F" + wren + "%2F" + fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight),
+		"/v1/assets/species%2F" + wren + "%2Fportrait.png",
+	} {
+		if resp := h.get(path); resp.status != http.StatusOK || resp.header.Get("Content-Type") != "image/png" {
+			t.Errorf("GET %s = %d %q, want the image, as the spec says encoded slashes are accepted", path, resp.status, resp.header.Get("Content-Type"))
+		}
+	}
 }

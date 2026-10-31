@@ -27,7 +27,12 @@ const (
 	kindTypeOnlyFile  = "type-only-file"
 	kindAmbientAccess = "ambient-access"
 	kindFlagDefault   = "flag-default"
+
+	kindUndocumentedRoute = "undocumented-route"
 )
+
+// specFile is the OpenAPI document every route the server declares must appear in.
+const specFile = "api/openapi.yaml"
 
 // ambientOSCalls read or change process-wide ambient state. Outside cmd/ every
 // one is banned: packages receive their configuration explicitly.
@@ -119,6 +124,12 @@ func report(w io.Writer, err error) int {
 func audit(root string) ([]finding, error) {
 	var all []finding
 
+	// A missing document is an empty one, so every route is then undocumented.
+	spec, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(specFile)))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("reading %s: %w", specFile, err)
+	}
+
 	walk := func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("walking %s: %w", p, err)
@@ -143,7 +154,7 @@ func audit(root string) ([]finding, error) {
 			return fmt.Errorf("making %s relative to %s: %w", p, root, err)
 		}
 
-		found, err := auditFile(p, filepath.ToSlash(rel))
+		found, err := auditFile(p, filepath.ToSlash(rel), string(spec))
 		if err != nil {
 			return err
 		}
@@ -168,7 +179,7 @@ func audit(root string) ([]finding, error) {
 	return all, nil
 }
 
-func auditFile(abs, rel string) ([]finding, error) {
+func auditFile(abs, rel, spec string) ([]finding, error) {
 	fset := token.NewFileSet()
 
 	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution)
@@ -193,6 +204,30 @@ func auditFile(abs, rel string) ([]finding, error) {
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.ValueSpec:
+			// A route is a package-level constant in server/ named ...Path whose
+			// value is an absolute URL path. The API contract must describe it.
+			if top == "server" && !isTest {
+				for i, name := range node.Names {
+					if i >= len(node.Values) || !strings.HasSuffix(name.Name, "Path") {
+						continue
+					}
+
+					lit, ok := node.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+
+					route, err := strconv.Unquote(lit.Value)
+					if err != nil || !strings.HasPrefix(route, "/") {
+						continue
+					}
+
+					if !strings.Contains(spec, "\n  "+route) {
+						add(node.Pos(), kindUndocumentedRoute, fmt.Sprintf("route %s is not described in %s", route, specFile))
+					}
+				}
+			}
 		case *ast.SelectorExpr:
 			if refersTo(node.X, imps, "os") && slices.Contains(ambientOSCalls, node.Sel.Name) {
 				switch {

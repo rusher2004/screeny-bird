@@ -5,7 +5,7 @@ info:
   description: |
     Read-only HTTP API for the bird plate catalog, for the screensaver clients.
 
-    There are no credentials and no write operations. Only GET and HEAD are accepted; any other method is answered with 405 and an `Allow` header. Every response carries `X-Content-Type-Options: nosniff`. Cross-origin browser access is granted only to origins the operator configured exactly, never with credentials; native clients are unaffected.
+    There are no credentials and no write operations. Only GET and HEAD are accepted; any other method is answered with 405 and an `Allow` header. Every response carries `X-Content-Type-Options: nosniff`, and every error and health response is `Cache-Control: no-store`. Cross-origin browser access is granted only to origins the operator configured exactly, never with credentials; native clients are unaffected.
 
     The client is configured with the server's base URL, so no `servers` entry is declared.
 
@@ -16,7 +16,7 @@ info:
     3. The original plates are at `/v1/assets/{path}` using `portrait_path` and `display_path`. `display_path` is the plate rotated 90 degrees for a landscape e-ink frame, so its text runs sideways; a screensaver wants the derived image or `portrait_path`.
     4. A `503` on an image means the server could not verify it. Skip that species and try again later.
 
-    Image `{path}` values contain slashes (for example `species/16638-acadian-flycatcher/3840x2160.png`). Append the value from the catalog to the route prefix as is; do not build one yourself.
+    Image `{path}` values contain slashes (for example `species/16638-acadian-flycatcher/3840x2160.png`). Append the value from the catalog to the route prefix as is; do not build one yourself. A client that percent-encodes the slashes as `%2F` is also understood.
 tags:
   - name: health
   - name: catalog
@@ -31,17 +31,9 @@ paths:
         `200` while the server is healthy. `503` when the latest reload of the catalog failed and an older, valid catalog is still being served. A species that is waiting for its derived image does not make the server unhealthy; it is counted in `pending_derive`.
       responses:
         "200":
-          description: Healthy.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
+          $ref: "#/components/responses/Healthy"
         "503":
-          description: The latest reload failed; the previous catalog is still served.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
+          $ref: "#/components/responses/Unhealthy"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
   /v1/catalog:
@@ -55,23 +47,9 @@ paths:
         - $ref: "#/components/parameters/IfNoneMatch"
       responses:
         "200":
-          description: The catalog.
-          headers:
-            ETag:
-              $ref: "#/components/headers/ETag"
-            Cache-Control:
-              $ref: "#/components/headers/CacheControlRevalidate"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Catalog"
+          $ref: "#/components/responses/Catalog"
         "304":
-          description: The client's copy is current.
-          headers:
-            ETag:
-              $ref: "#/components/headers/ETag"
-            Cache-Control:
-              $ref: "#/components/headers/CacheControlRevalidate"
+          $ref: "#/components/responses/DocumentNotModified"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
   /v1/openapi.yaml:
@@ -84,24 +62,9 @@ paths:
         - $ref: "#/components/parameters/IfNoneMatch"
       responses:
         "200":
-          description: The OpenAPI document.
-          headers:
-            ETag:
-              $ref: "#/components/headers/ETag"
-            Cache-Control:
-              $ref: "#/components/headers/CacheControlRevalidate"
-          content:
-            application/yaml:
-              schema:
-                type: object
-                description: An OpenAPI document.
+          $ref: "#/components/responses/OpenAPIDocument"
         "304":
-          description: The client's copy is current.
-          headers:
-            ETag:
-              $ref: "#/components/headers/ETag"
-            Cache-Control:
-              $ref: "#/components/headers/CacheControlRevalidate"
+          $ref: "#/components/responses/DocumentNotModified"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
   /v1/assets/{path}:
@@ -161,8 +124,7 @@ components:
       name: path
       in: path
       required: true
-      description: The path exactly as the catalog gives it. It contains slashes.
-      allowReserved: true
+      description: The path exactly as the catalog gives it. It contains slashes, which may be sent as is or percent-encoded as `%2F`; the server accepts both.
       schema:
         type: string
         example: species/16638-acadian-flycatcher/3840x2160.png
@@ -185,17 +147,120 @@ components:
       description: "`no-cache`: store it, but revalidate before reuse."
       schema:
         type: string
+    CacheControlImage:
+      required: true
+      description: "`public, max-age=31536000, immutable` when `sha256` matches the image, otherwise `no-cache`."
+      schema:
+        type: string
+    CacheControlNoStore:
+      required: true
+      description: "`no-store`: this response must not be cached."
+      schema:
+        type: string
+    NoSniff:
+      required: true
+      description: "`nosniff`. Sent on every response."
+      schema:
+        type: string
+    Vary:
+      required: true
+      description: "`Origin`: whether the CORS header is present depends on the request's origin. Sent on every response from a route browsers may read."
+      schema:
+        type: string
+    AllowOrigin:
+      required: false
+      description: Echoes the request's `Origin` when the operator listed that exact origin. Never `*`, and credentials are never allowed.
+      schema:
+        type: string
+    Allow:
+      required: true
+      description: "`GET, HEAD`"
+      schema:
+        type: string
   responses:
+    Healthy:
+      description: Healthy.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Health"
+    Unhealthy:
+      description: The latest reload failed; the previous catalog is still served.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Health"
+    Catalog:
+      description: The catalog.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Catalog"
+    OpenAPIDocument:
+      description: The OpenAPI document.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
+      content:
+        application/yaml:
+          schema:
+            type: object
+            description: An OpenAPI document.
+    DocumentNotModified:
+      description: The client's copy is current.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlRevalidate"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
     Image:
       description: The verified PNG.
       headers:
         ETag:
           $ref: "#/components/headers/ETag"
         Cache-Control:
-          required: true
-          description: "`public, max-age=31536000, immutable` when `sha256` matches the image, otherwise `no-cache`."
-          schema:
-            type: string
+          $ref: "#/components/headers/CacheControlImage"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
       content:
         image/png:
           schema:
@@ -207,11 +272,24 @@ components:
         ETag:
           $ref: "#/components/headers/ETag"
         Cache-Control:
-          description: Same as on the 200 response.
-          schema:
-            type: string
+          $ref: "#/components/headers/CacheControlImage"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
     NotFound:
       description: The path is not an image this server lists.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
       content:
         application/json:
           schema:
@@ -220,16 +298,26 @@ components:
       description: Only GET and HEAD are accepted.
       headers:
         Allow:
-          required: true
-          description: "`GET, HEAD`"
-          schema:
-            type: string
+          $ref: "#/components/headers/Allow"
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
     ImageUnavailable:
       description: The file is missing or its bytes do not match the recorded checksum, so nothing was sent.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/CacheControlNoStore"
+        Vary:
+          $ref: "#/components/headers/Vary"
+        Access-Control-Allow-Origin:
+          $ref: "#/components/headers/AllowOrigin"
+        X-Content-Type-Options:
+          $ref: "#/components/headers/NoSniff"
       content:
         application/json:
           schema:

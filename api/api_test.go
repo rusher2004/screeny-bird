@@ -59,7 +59,7 @@ func TestEveryOperationIsNamedAndOnlyReads(t *testing.T) {
 		seen[id] = path
 	}
 
-	if len(seen) != 5 {
-		t.Errorf("the spec has %d operations, want 5", len(seen))
+	if len(seen) == 0 {
+		t.Error("the spec documents no operations")
 	}
 }

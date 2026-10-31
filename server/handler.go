@@ -176,38 +176,43 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 	snap := s.state.Load()
 
-	w.Header().Set("ETag", snap.catalogETag)
-	w.Header().Set("Cache-Control", revalidate)
-
-	if etagMatches(r.Header.Get("If-None-Match"), snap.catalogETag) {
-		w.WriteHeader(http.StatusNotModified)
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(snap.catalogJSON)))
-
-	// The client may have gone away; there is nobody left to tell.
-	_, _ = w.Write(snap.catalogJSON)
+	serveDocument(w, r, snap.catalogETag, "application/json", snap.catalogJSON)
 }
 
 // spec serves the OpenAPI document this server implements.
 func (s *Server) spec(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("ETag", s.specETag)
+	serveDocument(w, r, s.specETag, "application/yaml", s.specDoc)
+}
+
+// serveDocument sends body, or an empty 304 when the client already holds the
+// version etag names. Documents are revalidated on every use.
+func serveDocument(w http.ResponseWriter, r *http.Request, etag, contentType string, body []byte) {
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", revalidate)
 
-	if etagMatches(r.Header.Get("If-None-Match"), s.specETag) {
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Length", strconv.Itoa(len(s.opts.Spec)))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 
 	// The client may have gone away; there is nobody left to tell.
-	_, _ = w.Write(s.opts.Spec)
+	_, _ = w.Write(body)
+}
+
+// quoted writes a digest as a strong ETag.
+func quoted(digest string) string {
+	return `"` + digest + `"`
+}
+
+// etagOf is the strong ETag of body: its SHA-256.
+func etagOf(body []byte) string {
+	sum := sha256.Sum256(body)
+
+	return quoted(hex.EncodeToString(sum[:]))
 }
 
 // asset serves one image the catalog lists, after checking its bytes against
@@ -238,7 +243,7 @@ func (s *Server) serveImage(w http.ResponseWriter, r *http.Request, listed map[s
 		return
 	}
 
-	etag := `"` + want + `"`
+	etag := quoted(want)
 	cache := revalidate
 
 	// A request that names the exact digest can be cached forever, because the

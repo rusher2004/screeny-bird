@@ -3,8 +3,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -97,8 +96,11 @@ type Options struct {
 
 // Server serves one catalog. Build it with New and run it with Serve.
 type Server struct {
-	opts     Options
-	allowed  map[string]bool
+	opts    Options
+	allowed map[string]bool
+	// specDoc is the server's own copy of the OpenAPI document, so a caller
+	// that later changes its slice cannot make the body and ETag disagree.
+	specDoc  []byte
 	specETag string
 
 	// state is the catalog being served. It is replaced whole, never edited.
@@ -164,9 +166,9 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("creating server: %w: %w", ErrInvalidServer, err)
 	}
 
-	digest := sha256.Sum256(opts.Spec)
+	specDoc := slices.Clone(opts.Spec)
 
-	return &Server{opts: opts, allowed: allowed, specETag: `"` + hex.EncodeToString(digest[:]) + `"`}, nil
+	return &Server{opts: opts, allowed: allowed, specDoc: specDoc, specETag: etagOf(specDoc)}, nil
 }
 
 // snapshot is one validated catalog, ready to serve.
@@ -323,13 +325,12 @@ func (s *Server) load() (*snapshot, error) {
 		return nil, fmt.Errorf("encoding the catalog: %w", err)
 	}
 
-	digest := sha256.Sum256(body)
 	snap := &snapshot{
 		indexVersion: version,
 		species:      len(served),
 		pending:      pending,
 		catalogJSON:  body,
-		catalogETag:  `"` + hex.EncodeToString(digest[:]) + `"`,
+		catalogETag:  etagOf(body),
 		assets:       make(map[string]string, 2*len(served)),
 		derived:      make(map[string]string, len(served)),
 	}
