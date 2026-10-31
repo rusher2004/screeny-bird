@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -15,12 +16,25 @@ import (
 // operator setting.
 const maxTOMLBytes = 1 << 20
 
-// TOMLLoader loads the settings from TOML files on disk. Files are decoded
-// strictly: unknown keys, wrong types and missing or empty settings are errors.
-type TOMLLoader struct{}
+// TOMLLoader loads the settings from the TOML file at one path. The file is
+// decoded strictly: unknown keys, wrong types and missing or empty settings are
+// errors.
+type TOMLLoader struct {
+	path string
+}
 
-// LoadConfig reads, strictly decodes and validates the file at path.
-func (TOMLLoader) LoadConfig(path string) (Config, error) {
+// NewTOMLLoader returns a loader for the file at path. A blank path is an error.
+func NewTOMLLoader(path string) (TOMLLoader, error) {
+	if strings.TrimSpace(path) == "" {
+		return TOMLLoader{}, fmt.Errorf("creating TOML loader: path: %w", ErrMissingSetting)
+	}
+
+	return TOMLLoader{path: path}, nil
+}
+
+// Load reads, strictly decodes and validates the loader's file.
+func (l TOMLLoader) Load() (Config, error) {
+	path := l.path
 	fsys, name := os.DirFS(filepath.Dir(path)), filepath.Base(path)
 
 	info, err := fs.Stat(fsys, name)

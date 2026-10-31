@@ -19,7 +19,12 @@ func load(t *testing.T, content string) (config.Config, error) {
 		t.Fatalf("writing config: %v", err)
 	}
 
-	return config.TOMLLoader{}.LoadConfig(path)
+	loader, err := config.NewTOMLLoader(path)
+	if err != nil {
+		t.Fatalf("NewTOMLLoader() error = %v", err)
+	}
+
+	return loader.Load()
 }
 
 func TestLoadReadsEverySetting(t *testing.T) {
@@ -99,7 +104,12 @@ func TestLoadNamesTheUnknownKey(t *testing.T) {
 func TestLoadReportsAMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := config.TOMLLoader{}.LoadConfig(filepath.Join(t.TempDir(), "absent.toml"))
+	loader, err := config.NewTOMLLoader(filepath.Join(t.TempDir(), "absent.toml"))
+	if err != nil {
+		t.Fatalf("NewTOMLLoader() error = %v", err)
+	}
+
+	_, err = loader.Load()
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Load() error = %v, want fs.ErrNotExist", err)
 	}
@@ -113,7 +123,22 @@ func TestLoadReportsAMissingFile(t *testing.T) {
 func TestExampleConfigLoads(t *testing.T) {
 	t.Parallel()
 
-	if _, err := (config.TOMLLoader{}).LoadConfig(filepath.Join("..", "config.example.toml")); err != nil {
+	loader, err := config.NewTOMLLoader(filepath.Join("..", "config.example.toml"))
+	if err != nil {
+		t.Fatalf("NewTOMLLoader() error = %v", err)
+	}
+
+	if _, err := loader.Load(); err != nil {
 		t.Fatalf("Load(config.example.toml) error = %v", err)
+	}
+}
+
+func TestNewTOMLLoaderRequiresAPath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"", "   "} {
+		if _, err := config.NewTOMLLoader(path); !errors.Is(err, config.ErrMissingSetting) {
+			t.Errorf("NewTOMLLoader(%q) error = %v, want ErrMissingSetting", path, err)
+		}
 	}
 }

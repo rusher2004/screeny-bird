@@ -16,20 +16,98 @@ import (
 	"github.com/rusher2004/screeny-bird/config"
 )
 
-func run(t *testing.T, opts commands.Options, args ...string) (output string, err error) {
+type fakeConfigs struct {
+	paths   []string
+	cfg     config.Config
+	newErr  error
+	loadErr error
+}
+
+func (f *fakeConfigs) New(path string) (commands.ConfigLoader, error) {
+	f.paths = append(f.paths, path)
+
+	if f.newErr != nil {
+		return nil, f.newErr
+	}
+
+	return f, nil
+}
+
+func (f *fakeConfigs) Load() (config.Config, error) {
+	return f.cfg, f.loadErr
+}
+
+type fakeCatalogs struct {
+	dirs    []string
+	newErr  error
+	loadErr error
+}
+
+func (f *fakeCatalogs) New(dir string) (commands.CatalogLoader, error) {
+	f.dirs = append(f.dirs, dir)
+
+	if f.newErr != nil {
+		return nil, f.newErr
+	}
+
+	return f, nil
+}
+
+// Load returns an empty catalog: the zero value is valid and holds no species.
+func (f *fakeCatalogs) Load() (*catalog.Catalog, error) {
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
+
+	return &catalog.Catalog{}, nil
+}
+
+func newTOMLLoader(path string) (commands.ConfigLoader, error) {
+	loader, err := config.NewTOMLLoader(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return loader, nil
+}
+
+func newDirLoader(dir string) (commands.CatalogLoader, error) {
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return loader, nil
+}
+
+// run builds the command tree from fakes and runs args. Pass nil fakes for a
+// dependency the test does not care about.
+func run(t *testing.T, configs *fakeConfigs, catalogs *fakeCatalogs, args ...string) (output string, err error) {
+	t.Helper()
+
+	if configs == nil {
+		configs = &fakeConfigs{}
+	}
+
+	if catalogs == nil {
+		catalogs = &fakeCatalogs{}
+	}
+
+	return runWith(t, commands.Options{NewConfigLoader: configs.New, NewCatalogLoader: catalogs.New}, args...)
+}
+
+// runReal runs args with the real config and catalog loaders.
+func runReal(t *testing.T, args ...string) (output string, err error) {
+	t.Helper()
+
+	return runWith(t, commands.Options{NewConfigLoader: newTOMLLoader, NewCatalogLoader: newDirLoader}, args...)
+}
+
+func runWith(t *testing.T, opts commands.Options, args ...string) (output string, err error) {
 	t.Helper()
 
 	var buf bytes.Buffer
 	opts.Output = &buf
-
-	// Tests that do not care about a dependency get an inert fake.
-	if opts.Configs == nil {
-		opts.Configs = &fakeConfigs{}
-	}
-
-	if opts.Catalogs == nil {
-		opts.Catalogs = &fakeCatalogs{}
-	}
 
 	cmd, err := commands.New(opts)
 	if err != nil {
@@ -41,52 +119,18 @@ func run(t *testing.T, opts commands.Options, args ...string) (output string, er
 	return buf.String(), err
 }
 
-// runReal runs the command tree with the real config and catalog loaders.
-func runReal(t *testing.T, args ...string) (output string, err error) {
-	t.Helper()
-
-	return run(t, commands.Options{Configs: config.TOMLLoader{}, Catalogs: catalog.DirLoader{}}, args...)
-}
-
-type fakeCatalogs struct {
-	dirs []string
-	err  error
-}
-
-// LoadDir returns an empty catalog: the zero value is valid and holds no species.
-func (f *fakeCatalogs) LoadDir(dir string) (*catalog.Catalog, error) {
-	f.dirs = append(f.dirs, dir)
-
-	if f.err != nil {
-		return nil, f.err
-	}
-
-	return &catalog.Catalog{}, nil
-}
-
-type fakeConfigs struct {
-	paths []string
-	cfg   config.Config
-	err   error
-}
-
-func (f *fakeConfigs) LoadConfig(path string) (config.Config, error) {
-	f.paths = append(f.paths, path)
-
-	return f.cfg, f.err
-}
-
 func TestNewRequiresEveryDependency(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Output: &buf, Configs: &fakeConfigs{}, Catalogs: &fakeCatalogs{}}
+	configs, catalogs := &fakeConfigs{}, &fakeCatalogs{}
+	full := commands.Options{Output: &buf, NewConfigLoader: configs.New, NewCatalogLoader: catalogs.New}
 
 	tests := map[string]func(commands.Options) commands.Options{
-		"output":   func(o commands.Options) commands.Options { o.Output = nil; return o },
-		"configs":  func(o commands.Options) commands.Options { o.Configs = nil; return o },
-		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
+		"output":           func(o commands.Options) commands.Options { o.Output = nil; return o },
+		"newConfigLoader":  func(o commands.Options) commands.Options { o.NewConfigLoader = nil; return o },
+		"newCatalogLoader": func(o commands.Options) commands.Options { o.NewCatalogLoader = nil; return o },
 	}
 
 	for name, drop := range tests {
@@ -117,7 +161,7 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"output", "configs", "catalogs"} {
+	for _, name := range []string{"output", "newConfigLoader", "newCatalogLoader"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -129,9 +173,9 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 func TestVersionFailsWhenTheBuildSetNone(t *testing.T) {
 	t.Parallel()
 
-	configs := &fakeConfigs{}
+	configs, catalogs := &fakeConfigs{}, &fakeCatalogs{}
 
-	output, err := run(t, commands.Options{Configs: configs}, "version")
+	output, err := run(t, configs, catalogs, "version")
 	if !errors.Is(err, commands.ErrNoVersion) {
 		t.Fatalf("Run(version) error = %v, want ErrNoVersion", err)
 	}
@@ -140,8 +184,8 @@ func TestVersionFailsWhenTheBuildSetNone(t *testing.T) {
 		t.Fatalf("Run(version) printed %q, want nothing", output)
 	}
 
-	if len(configs.paths) != 0 {
-		t.Fatalf("version loaded config from %v", configs.paths)
+	if len(configs.paths) != 0 || len(catalogs.dirs) != 0 {
+		t.Fatalf("version built loaders (config %v, catalog %v)", configs.paths, catalogs.dirs)
 	}
 }
 
@@ -159,7 +203,7 @@ func TestUsageErrorsCarryExitCodeTwo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := run(t, commands.Options{}, args...)
+			_, err := run(t, nil, nil, args...)
 			if err == nil {
 				t.Fatal("Run() error = nil, want usage error")
 			}
@@ -176,13 +220,13 @@ func TestUsageErrorsCarryExitCodeTwo(t *testing.T) {
 	}
 }
 
-func TestCatalogValidateReportsSpeciesCount(t *testing.T) {
+func TestCatalogValidateLoadsConfigThenCatalog(t *testing.T) {
 	t.Parallel()
 
 	configs := &fakeConfigs{cfg: config.Config{CatalogDir: "/data/catalog"}}
 	catalogs := &fakeCatalogs{}
 
-	output, err := run(t, commands.Options{Configs: configs, Catalogs: catalogs}, "catalog", "validate", "--config", "/etc/screeny.toml")
+	output, err := run(t, configs, catalogs, "catalog", "validate", "--config", "/etc/screeny.toml")
 	if err != nil {
 		t.Fatalf("Run(catalog validate) error = %v", err)
 	}
@@ -213,10 +257,9 @@ func TestCatalogValidateRequiresTheConfigFlag(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			configs := &fakeConfigs{}
-			catalogs := &fakeCatalogs{}
+			configs, catalogs := &fakeConfigs{}, &fakeCatalogs{}
 
-			_, err := run(t, commands.Options{Configs: configs, Catalogs: catalogs}, args...)
+			_, err := run(t, configs, catalogs, args...)
 			if !errors.Is(err, commands.ErrMissingSetting) {
 				t.Fatalf("Run() error = %v, want ErrMissingSetting", err)
 			}
@@ -230,43 +273,52 @@ func TestCatalogValidateRequiresTheConfigFlag(t *testing.T) {
 			}
 
 			if len(configs.paths) != 0 || len(catalogs.dirs) != 0 {
-				t.Errorf("loaders called (config %v, catalog %v) without the flag", configs.paths, catalogs.dirs)
+				t.Errorf("loaders built (config %v, catalog %v) without the flag", configs.paths, catalogs.dirs)
 			}
 		})
 	}
 }
 
-func TestCatalogValidateWrapsConfigFailure(t *testing.T) {
+func TestCatalogValidateWrapsEachFailure(t *testing.T) {
 	t.Parallel()
 
-	cause := errors.New("unknown settings")
-	configs := &fakeConfigs{err: cause}
-	catalogs := &fakeCatalogs{}
+	cause := errors.New("boom")
 
-	_, err := run(t, commands.Options{Configs: configs, Catalogs: catalogs}, "catalog", "validate", "--config", "c.toml")
-	if !errors.Is(err, cause) {
-		t.Fatalf("Run() error = %v, want it to wrap %v", err, cause)
+	tests := []struct {
+		name         string
+		configs      *fakeConfigs
+		catalogs     *fakeCatalogs
+		wantCatalogs int
+	}{
+		{name: "config loader creation", configs: &fakeConfigs{newErr: cause}, catalogs: &fakeCatalogs{}},
+		{name: "config load", configs: &fakeConfigs{loadErr: cause}, catalogs: &fakeCatalogs{}},
+		{
+			name:         "catalog loader creation",
+			configs:      &fakeConfigs{cfg: config.Config{CatalogDir: "/data/catalog"}},
+			catalogs:     &fakeCatalogs{newErr: cause},
+			wantCatalogs: 1,
+		},
+		{
+			name:         "catalog load",
+			configs:      &fakeConfigs{cfg: config.Config{CatalogDir: "/data/catalog"}},
+			catalogs:     &fakeCatalogs{loadErr: cause},
+			wantCatalogs: 1,
+		},
 	}
 
-	if len(catalogs.dirs) != 0 {
-		t.Fatalf("catalog loaded from %v after the config failed", catalogs.dirs)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestCatalogValidateWrapsCatalogFailure(t *testing.T) {
-	t.Parallel()
+			_, err := run(t, tt.configs, tt.catalogs, "catalog", "validate", "--config", "c.toml")
+			if !errors.Is(err, cause) {
+				t.Fatalf("Run() error = %v, want it to wrap %v", err, cause)
+			}
 
-	cause := errors.New("checksum mismatch")
-	configs := &fakeConfigs{cfg: config.Config{CatalogDir: "/data/catalog"}}
-	catalogs := &fakeCatalogs{err: cause}
-
-	_, err := run(t, commands.Options{Configs: configs, Catalogs: catalogs}, "catalog", "validate", "--config", "c.toml")
-	if !errors.Is(err, cause) {
-		t.Fatalf("Run() error = %v, want it to wrap %v", err, cause)
-	}
-
-	if !strings.Contains(err.Error(), "/data/catalog") {
-		t.Fatalf("error %q does not name the directory", err)
+			if got := len(tt.catalogs.dirs); got != tt.wantCatalogs {
+				t.Fatalf("catalog loaders created = %d, want %d", got, tt.wantCatalogs)
+			}
+		})
 	}
 }
 

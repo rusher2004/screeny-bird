@@ -44,23 +44,25 @@ func (e *ExitError) Error() string {
 	return e.Msg
 }
 
-// configLoader is what commands need to obtain the settings a command uses:
-// load the settings kept at path.
-type configLoader interface {
-	LoadConfig(path string) (config.Config, error)
+// ConfigLoader loads the settings a command uses.
+type ConfigLoader interface {
+	Load() (config.Config, error)
 }
 
-// catalogLoader is what the validate command needs from the catalog: load the
-// catalog in a directory.
-type catalogLoader interface {
-	LoadDir(dir string) (*catalog.Catalog, error)
+// CatalogLoader loads the catalog a command validates.
+type CatalogLoader interface {
+	Load() (*catalog.Catalog, error)
 }
 
 // Options is everything the command tree depends on. Every field is required.
+// The loaders are built by factories because what locates them, the config file
+// path and the catalog directory, is only known once a command is running.
 type Options struct {
-	Output   io.Writer
-	Configs  configLoader
-	Catalogs catalogLoader
+	Output io.Writer
+	// NewConfigLoader returns a loader for the settings kept at path.
+	NewConfigLoader func(path string) (ConfigLoader, error)
+	// NewCatalogLoader returns a loader for the catalog kept at dir.
+	NewCatalogLoader func(dir string) (CatalogLoader, error)
 }
 
 // New builds the command tree from explicit dependencies. Run on the result
@@ -73,12 +75,12 @@ func New(opts Options) (*cli.Command, error) {
 		missing = append(missing, fmt.Errorf("output: %w", ErrMissingOption))
 	}
 
-	if opts.Configs == nil {
-		missing = append(missing, fmt.Errorf("configs: %w", ErrMissingOption))
+	if opts.NewConfigLoader == nil {
+		missing = append(missing, fmt.Errorf("newConfigLoader: %w", ErrMissingOption))
 	}
 
-	if opts.Catalogs == nil {
-		missing = append(missing, fmt.Errorf("catalogs: %w", ErrMissingOption))
+	if opts.NewCatalogLoader == nil {
+		missing = append(missing, fmt.Errorf("newCatalogLoader: %w", ErrMissingOption))
 	}
 
 	if err := errors.Join(missing...); err != nil {
@@ -130,12 +132,22 @@ func New(opts Options) (*cli.Command, error) {
 								return fmt.Errorf("%w: pass --%s with the path to the config file", ErrMissingSetting, configFlag)
 							}
 
-							cfg, err := opts.Configs.LoadConfig(path)
+							configLoader, err := opts.NewConfigLoader(path)
+							if err != nil {
+								return fmt.Errorf("creating config loader: %w", err)
+							}
+
+							cfg, err := configLoader.Load()
 							if err != nil {
 								return fmt.Errorf("loading config: %w", err)
 							}
 
-							loaded, err := opts.Catalogs.LoadDir(cfg.CatalogDir)
+							catalogLoader, err := opts.NewCatalogLoader(cfg.CatalogDir)
+							if err != nil {
+								return fmt.Errorf("creating catalog loader: %w", err)
+							}
+
+							loaded, err := catalogLoader.Load()
 							if err != nil {
 								return fmt.Errorf("validating catalog %q: %w", cfg.CatalogDir, err)
 							}

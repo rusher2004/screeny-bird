@@ -22,15 +22,37 @@ func main() {
 // line, writing command output to w.
 func run(ctx context.Context, args []string, w io.Writer) error {
 	cmd, err := commands.New(commands.Options{
-		Output:   w,
-		Configs:  config.TOMLLoader{},
-		Catalogs: catalog.DirLoader{},
+		Output:           w,
+		NewConfigLoader:  newConfigLoader,
+		NewCatalogLoader: newCatalogLoader,
 	})
 	if err != nil {
 		return err
 	}
 
 	return cmd.Run(ctx, args)
+}
+
+// newConfigLoader adapts config.NewTOMLLoader to the factory commands declares,
+// returning an untyped nil on failure.
+func newConfigLoader(path string) (commands.ConfigLoader, error) {
+	loader, err := config.NewTOMLLoader(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return loader, nil
+}
+
+// newCatalogLoader adapts catalog.NewDirLoader to the factory commands
+// declares, returning an untyped nil on failure.
+func newCatalogLoader(dir string) (commands.CatalogLoader, error) {
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return loader, nil
 }
 
 // report prints err to w once and returns the process exit code: 0 for no

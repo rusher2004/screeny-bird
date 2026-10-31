@@ -40,13 +40,28 @@ func TestDirLoaderLoadsACatalogFromDisk(t *testing.T) {
 
 	dir := writeTree(t, build(t, []speciesFixture{wren, finch}, nil))
 
-	got, err := catalog.DirLoader{}.LoadDir(dir)
+	loader, err := catalog.NewDirLoader(dir)
 	if err != nil {
-		t.Fatalf("LoadDir() error = %v", err)
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	got, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 
 	if n := len(got.Species()); n != 2 {
-		t.Fatalf("LoadDir() loaded %d species, want 2", n)
+		t.Fatalf("Load() loaded %d species, want 2", n)
+	}
+}
+
+func TestNewDirLoaderRequiresADirectory(t *testing.T) {
+	t.Parallel()
+
+	for _, dir := range []string{"", "   "} {
+		if _, err := catalog.NewDirLoader(dir); !errors.Is(err, catalog.ErrNoDirectory) {
+			t.Errorf("NewDirLoader(%q) error = %v, want ErrNoDirectory", dir, err)
+		}
 	}
 }
 
@@ -79,13 +94,18 @@ func TestDirLoaderReportsProblems(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := catalog.DirLoader{}.LoadDir(tt.dir(t))
+			loader, err := catalog.NewDirLoader(tt.dir(t))
+			if err != nil {
+				t.Fatalf("NewDirLoader() error = %v", err)
+			}
+
+			got, err := loader.Load()
 			if !errors.Is(err, tt.want) {
-				t.Fatalf("LoadDir() error = %v, want %v", err, tt.want)
+				t.Fatalf("Load() error = %v, want %v", err, tt.want)
 			}
 
 			if got != nil {
-				t.Fatalf("LoadDir() = %v with an error, want no catalog", got)
+				t.Fatalf("Load() = %v with an error, want no catalog", got)
 			}
 		})
 	}
