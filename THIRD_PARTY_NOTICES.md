@@ -4,7 +4,7 @@ Screeny Bird is licensed under the [MIT License](LICENSE). It builds on the work
 
 ## Inky Bird Frame
 
-Screeny Bird exists because of [Inky Bird Frame](https://github.com/veteranbv/inky-bird-frame) by Henry Sowell. That project designed the catalog format, the research and review pipeline that produces each approved plate, and the approved plate catalog itself. Screeny Bird reimplements the catalog-handling behavior in Go for a macOS and tvOS screensaver. It is a separate project and is not affiliated with or endorsed by Inky Bird Frame or its author.
+Screeny Bird exists because of [Inky Bird Frame](https://github.com/veteranbv/inky-bird-frame) by Henry Sowell. That project designed the catalog format, the research and review pipeline that produces each approved plate, and the approved plate catalog itself. Screeny Bird reimplements the catalog-handling behavior in Go for a macOS screensaver. It is a separate project and is not affiliated with or endorsed by Inky Bird Frame or its author.
 
 - Source: <https://github.com/veteranbv/inky-bird-frame>
 - Reviewed upstream revision: `8bc988b239d7ffb7d7394b1e5ad174b90f18ae1e`
