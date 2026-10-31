@@ -53,6 +53,46 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | `healthcheck_timeout_seconds` | `healthcheck` | Seconds allowed for the healthcheck request. |
 | `cors_allowed_origins` | `serve` | Browser origins allowed to read the catalog and images. An empty list allows none. |
 
+## Running locally
+
+You need Docker. The stack runs the same image as production, and nothing has a default: you give it the version and a settings file.
+
+Copy the example settings. `config.local.toml` is gitignored, and its `listen_address` must stay `:8080` to match the port the stack publishes.
+
+```bash
+cp config.example.toml config.local.toml
+```
+
+Fetch the catalog into the stack's data volume. The first sync downloads the whole upstream catalog, about 1.1 GB, so it takes several minutes. A sync that fails publishes nothing, so run it again.
+
+```bash
+VERSION="$(cat VERSION)" docker compose run --rm sync
+```
+
+Start the server.
+
+```bash
+VERSION="$(cat VERSION)" docker compose up --build
+```
+
+Try it from another terminal.
+
+```bash
+curl localhost:8080/healthz
+```
+
+```bash
+curl localhost:8080/v1/catalog
+```
+
+To pick up new upstream species later, run the sync command again. The running server notices the change within `reload_interval_seconds`. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
+
+Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog validate` and `./screeny serve`.
+
+```bash
+go build -ldflags "-X main.version=$(cat VERSION)" -o screeny ./cmd
+```
+
 ## Packages
 
 | Package | Role |
