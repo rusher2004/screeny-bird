@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/commands"
+	"github.com/rusher2004/screeny-bird/config"
 )
 
 func main() {
@@ -16,9 +18,14 @@ func main() {
 	os.Exit(report(os.Stderr, err))
 }
 
-// run executes the command line, writing command output to w.
+// run wires the real config and catalog loaders and executes the command
+// line, writing command output to w.
 func run(ctx context.Context, args []string, w io.Writer) error {
-	cmd, err := commands.New(w)
+	cmd, err := commands.New(commands.Options{
+		Output:   w,
+		Configs:  config.TOMLLoader{},
+		Catalogs: catalog.DirLoader{},
+	})
 	if err != nil {
 		return err
 	}

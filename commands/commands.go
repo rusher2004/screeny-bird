@@ -56,30 +56,17 @@ type catalogLoader interface {
 	LoadDir(dir string) (*catalog.Catalog, error)
 }
 
-// Options is everything the command tree depends on. Output, Configs and
-// Catalogs are required. Version is what the build reported; empty means the
-// build set none, and the version command then fails with ErrNoVersion.
+// Options is everything the command tree depends on. Every field is required.
 type Options struct {
 	Output   io.Writer
-	Version  string
 	Configs  configLoader
 	Catalogs catalogLoader
 }
 
-// New builds the production command tree: the real config and catalog loaders
-// and the version the build injected. Run on the result returns every error,
-// including usage errors, and never prints one or exits the process.
-func New(output io.Writer) (*cli.Command, error) {
-	return NewWith(Options{
-		Output:   output,
-		Version:  version,
-		Configs:  config.TOMLLoader{},
-		Catalogs: catalog.DirLoader{},
-	})
-}
-
-// NewWith builds the command tree from explicit dependencies.
-func NewWith(opts Options) (*cli.Command, error) {
+// New builds the command tree from explicit dependencies. Run on the result
+// returns every error, including usage errors, and never prints one or exits
+// the process.
+func New(opts Options) (*cli.Command, error) {
 	var missing []error
 
 	if opts.Output == nil {
@@ -166,11 +153,11 @@ func NewWith(opts Options) (*cli.Command, error) {
 				Name:  "version",
 				Usage: "Print the application version",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					if opts.Version == "" {
+					if version == "" {
 						return fmt.Errorf("reading the version: %w", ErrNoVersion)
 					}
 
-					if _, err := fmt.Fprintln(cmd.Root().Writer, opts.Version); err != nil {
+					if _, err := fmt.Fprintln(cmd.Root().Writer, version); err != nil {
 						return fmt.Errorf("writing version: %w", err)
 					}
 

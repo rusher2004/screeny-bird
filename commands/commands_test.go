@@ -31,7 +31,7 @@ func run(t *testing.T, opts commands.Options, args ...string) (output string, er
 		opts.Catalogs = &fakeCatalogs{}
 	}
 
-	cmd, err := commands.NewWith(opts)
+	cmd, err := commands.New(opts)
 	if err != nil {
 		return "", err
 	}
@@ -41,20 +41,11 @@ func run(t *testing.T, opts commands.Options, args ...string) (output string, er
 	return buf.String(), err
 }
 
-// runProduction runs the command tree commands.New builds.
-func runProduction(t *testing.T, args ...string) (output string, err error) {
+// runReal runs the command tree with the real config and catalog loaders.
+func runReal(t *testing.T, args ...string) (output string, err error) {
 	t.Helper()
 
-	var buf bytes.Buffer
-
-	cmd, err := commands.New(&buf)
-	if err != nil {
-		return "", err
-	}
-
-	err = cmd.Run(context.Background(), append([]string{"screeny"}, args...))
-
-	return buf.String(), err
+	return run(t, commands.Options{Configs: config.TOMLLoader{}, Catalogs: catalog.DirLoader{}}, args...)
 }
 
 type fakeCatalogs struct {
@@ -85,7 +76,7 @@ func (f *fakeConfigs) LoadConfig(path string) (config.Config, error) {
 	return f.cfg, f.err
 }
 
-func TestNewWithRequiresEveryDependency(t *testing.T) {
+func TestNewRequiresEveryDependency(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -102,28 +93,28 @@ func TestNewWithRequiresEveryDependency(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			cmd, err := commands.NewWith(drop(full))
+			cmd, err := commands.New(drop(full))
 			if err == nil {
-				t.Fatalf("NewWith() = %v, want an error without %s", cmd, name)
+				t.Fatalf("New() = %v, want an error without %s", cmd, name)
 			}
 
 			if !errors.Is(err, commands.ErrMissingOption) || !strings.Contains(err.Error(), name) {
-				t.Fatalf("NewWith() error = %v, want ErrMissingOption naming %s", err, name)
+				t.Fatalf("New() error = %v, want ErrMissingOption naming %s", err, name)
 			}
 		})
 	}
 
-	if _, err := commands.NewWith(full); err != nil {
-		t.Fatalf("NewWith() with every dependency error = %v", err)
+	if _, err := commands.New(full); err != nil {
+		t.Fatalf("New() with every dependency error = %v", err)
 	}
 }
 
-func TestNewWithReportsEveryMissingDependency(t *testing.T) {
+func TestNewReportsEveryMissingDependency(t *testing.T) {
 	t.Parallel()
 
-	_, err := commands.NewWith(commands.Options{})
+	_, err := commands.New(commands.Options{})
 	if !errors.Is(err, commands.ErrMissingOption) {
-		t.Fatalf("NewWith() error = %v, want ErrMissingOption", err)
+		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
 	for _, name := range []string{"output", "configs", "catalogs"} {
@@ -133,41 +124,20 @@ func TestNewWithReportsEveryMissingDependency(t *testing.T) {
 	}
 }
 
-func TestVersionPrintsTheVersion(t *testing.T) {
-	t.Parallel()
-
-	output, err := run(t, commands.Options{Version: "1.2.3"}, "version")
-	if err != nil {
-		t.Fatalf("Run(version) error = %v", err)
-	}
-
-	if got, want := output, "1.2.3\n"; got != want {
-		t.Fatalf("Run(version) output = %q, want %q", got, want)
-	}
-}
-
 // Test binaries are built without the version ldflag, so this is the
 // unversioned build.
 func TestVersionFailsWhenTheBuildSetNone(t *testing.T) {
 	t.Parallel()
 
-	output, err := runProduction(t, "version")
+	configs := &fakeConfigs{}
+
+	output, err := run(t, commands.Options{Configs: configs}, "version")
 	if !errors.Is(err, commands.ErrNoVersion) {
 		t.Fatalf("Run(version) error = %v, want ErrNoVersion", err)
 	}
 
 	if output != "" {
 		t.Fatalf("Run(version) printed %q, want nothing", output)
-	}
-}
-
-func TestVersionNeedsNoConfig(t *testing.T) {
-	t.Parallel()
-
-	configs := &fakeConfigs{}
-
-	if _, err := run(t, commands.Options{Version: "1.2.3", Configs: configs}, "version"); err != nil {
-		t.Fatalf("Run(version) error = %v", err)
 	}
 
 	if len(configs.paths) != 0 {
@@ -189,7 +159,7 @@ func TestUsageErrorsCarryExitCodeTwo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := run(t, commands.Options{Version: "1.2.3"}, args...)
+			_, err := run(t, commands.Options{}, args...)
 			if err == nil {
 				t.Fatal("Run() error = nil, want usage error")
 			}
@@ -326,17 +296,17 @@ func TestCatalogValidateUsesTheRealConfigAndCatalogPackages(t *testing.T) {
 	valid := write("valid.toml", fmt.Sprintf("catalog_dir = %q\n", catalogDir))
 	emptyCatalog := write("empty.toml", fmt.Sprintf("catalog_dir = %q\n", t.TempDir()))
 
-	output, err := runProduction(t, "catalog", "validate", "--config", valid)
+	output, err := runReal(t, "catalog", "validate", "--config", valid)
 	if err != nil || output != "validated 0 species\n" {
 		t.Fatalf("Run() on a valid config and empty catalog = %q, %v; want %q", output, err, "validated 0 species\n")
 	}
 
-	_, err = runProduction(t, "catalog", "validate", "--config", filepath.Join(configDir, "absent.toml"))
+	_, err = runReal(t, "catalog", "validate", "--config", filepath.Join(configDir, "absent.toml"))
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Run() with a missing config file error = %v, want fs.ErrNotExist", err)
 	}
 
-	_, err = runProduction(t, "catalog", "validate", "--config", emptyCatalog)
+	_, err = runReal(t, "catalog", "validate", "--config", emptyCatalog)
 	if !errors.Is(err, catalog.ErrMissingFile) {
 		t.Fatalf("Run() on an empty directory error = %v, want catalog.ErrMissingFile", err)
 	}

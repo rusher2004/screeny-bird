@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rusher2004/screeny-bird/commands"
@@ -94,5 +97,31 @@ func TestReport(t *testing.T) {
 				t.Errorf("report() wrote %q, want %q", got, tt.wantReport)
 			}
 		})
+	}
+}
+
+func TestRunValidatesACatalogFromAConfigFile(t *testing.T) {
+	t.Parallel()
+
+	catalogDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(catalogDir, "species"), 0o755); err != nil {
+		t.Fatalf("creating species directory: %v", err)
+	}
+
+	index := `{"generated_at": null, "schema_version": 1, "species": []}` + "\n"
+	if err := os.WriteFile(filepath.Join(catalogDir, "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "screeny.toml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("catalog_dir = %q\n", catalogDir)), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	var output bytes.Buffer
+
+	err := run(context.Background(), []string{"screeny", "catalog", "validate", "--config", configPath}, &output)
+	if err != nil || output.String() != "validated 0 species\n" {
+		t.Fatalf("run() = %q, %v; want %q and no error", output.String(), err, "validated 0 species\n")
 	}
 }
