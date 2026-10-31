@@ -230,6 +230,12 @@ func joinDerived(species []catalog.Species, idx derive.Index) ([]servedSpecies, 
 
 		delete(byTaxon, sp.TaxonID)
 
+		if e.Slug != sp.Slug {
+			problems = append(problems, fmt.Errorf("derived image %s is for %q but the catalog names taxon %d %q: %w", e.Path, e.Slug, sp.TaxonID, sp.Slug, ErrDerivedMismatch))
+
+			continue
+		}
+
 		served = append(served, servedSpecies{
 			ApprovedAt:     sp.ApprovedAt,
 			CommonName:     sp.CommonName,

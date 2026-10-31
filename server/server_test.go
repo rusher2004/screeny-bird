@@ -609,6 +609,38 @@ func TestServeRefusesToStartWhenDeriveHasNotCaughtUp(t *testing.T) {
 	}
 }
 
+func TestServeRefusesADerivedImageForADifferentSlug(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren)
+
+	// The derived index still lists taxon 1001, but under an older name.
+	path := filepath.Join(h.derivedDir, "index.json")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading derived index: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "carolina-wren", "old-name")), 0o644); err != nil {
+		t.Fatalf("writing derived index: %v", err)
+	}
+
+	srv, err := server.New(h.opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = srv.Serve(context.Background())
+	if !errors.Is(err, server.ErrDerivedMismatch) || !strings.Contains(err.Error(), "old-name") {
+		t.Fatalf("Serve() error = %v, want ErrDerivedMismatch naming the stale slug", err)
+	}
+
+	if n := h.provider.calls.Load(); n != 0 {
+		t.Fatalf("Serve() opened the listener %d times, want 0", n)
+	}
+}
+
 func TestServeRefusesToStartWithoutADerivedIndex(t *testing.T) {
 	t.Parallel()
 

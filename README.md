@@ -96,7 +96,7 @@ curl localhost:8080/healthz
 curl localhost:8080/v1/catalog
 ```
 
-To pick up new upstream species later, run the sync command again, then derive. The server needs every species to have a derived image, so after a sync it keeps serving the old catalog and `/healthz` reports 503 until derive has run; it notices the finished derive within `reload_interval_seconds`. It also refuses to start until `catalog derive` has run once. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
+To pick up new upstream species later, run the sync command again, then derive. The server needs every species to have a derived image, so after a sync it keeps serving the old catalog and `/healthz` reports 503 until derive has run; it notices the finished derive within `reload_interval_seconds`. It also refuses to start until `catalog derive` has run once, and a restart in the window between sync and derive fails the same way, so a supervisor that restarts an unhealthy container will keep restarting it until derive finishes. Run derive straight after sync, for example in the same job. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
 
 Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog derive`, `./screeny catalog validate` and `./screeny serve`.
 

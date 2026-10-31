@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rusher2004/screeny-bird/catalog"
@@ -29,21 +28,23 @@ type DirLoader struct {
 // NewDirLoader returns a loader for the derived directory dir.
 func NewDirLoader(dir string) (DirLoader, error) {
 	if strings.TrimSpace(dir) == "" {
-		return DirLoader{}, fmt.Errorf("creating derived loader: %w", ErrNoDirectory)
+		return DirLoader{}, fmt.Errorf("creating loader: %w", ErrNoDirectory)
 	}
 
 	assets, err := catalog.NewDirLoader(dir)
 	if err != nil {
-		return DirLoader{}, fmt.Errorf("creating derived loader: %w", err)
+		return DirLoader{}, fmt.Errorf("opening the directory loader: %w", err)
 	}
 
 	return DirLoader{dir: dir, assets: assets}, nil
 }
 
-// Load reads the derived index and checks that it is consistent. It does not
-// read the images: callers verify those against the index's checksums.
+// Load reads the derived index and checks that it is consistent. The index is
+// read like an image: through os.Root, as a plain file under the size limit.
+// It does not read the images: callers verify those against the index's
+// checksums.
 func (l DirLoader) Load() (Index, error) {
-	raw, err := os.ReadFile(filepath.Join(l.dir, indexFile))
+	raw, err := l.assets.ReadAsset(indexFile)
 	if err != nil {
 		return Index{}, fmt.Errorf("reading the derived index of %s: %w", l.dir, err)
 	}
@@ -57,11 +58,27 @@ func (l DirLoader) Load() (Index, error) {
 }
 
 // IndexVersion returns a token that changes whenever the derived index is
-// replaced, so a change can be noticed without loading.
-func (l DirLoader) IndexVersion() (string, error) {
-	info, err := os.Stat(filepath.Join(l.dir, indexFile))
+// replaced, so a change can be noticed without loading. A symlink or anything
+// but a plain file is refused, as it is when loading.
+func (l DirLoader) IndexVersion() (version string, err error) {
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return "", fmt.Errorf("opening the derived directory %s: %w", l.dir, err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("closing the derived directory %s: %w", l.dir, closeErr))
+		}
+	}()
+
+	info, err := root.Lstat(indexFile)
 	if err != nil {
 		return "", fmt.Errorf("inspecting the derived index of %s: %w", l.dir, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("the derived index of %s: %w", l.dir, catalog.ErrNotRegularFile)
 	}
 
 	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano()), nil

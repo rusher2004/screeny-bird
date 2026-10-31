@@ -22,7 +22,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -280,11 +279,6 @@ func (d Deriver) readIndex() (map[int]Entry, error) {
 	return byTaxon, nil
 }
 
-var (
-	slugPattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-)
-
 // parseIndex decodes a derived index strictly and checks that it is
 // internally consistent: a known schema, a positive size within bounds, unique
 // taxa, and for each entry a valid slug and checksum and the one path its
@@ -312,6 +306,12 @@ func parseIndex(raw []byte) (index, error) {
 	var problems []error
 
 	for _, e := range idx.Species {
+		if e.TaxonID <= 0 {
+			problems = append(problems, fmt.Errorf("taxon %d is not a positive taxon ID: %w", e.TaxonID, ErrInvalidIndex))
+
+			continue
+		}
+
 		if seen[e.TaxonID] {
 			problems = append(problems, fmt.Errorf("taxon %d appears twice: %w", e.TaxonID, ErrInvalidIndex))
 
@@ -320,11 +320,11 @@ func parseIndex(raw []byte) (index, error) {
 
 		seen[e.TaxonID] = true
 
-		if !slugPattern.MatchString(e.Slug) {
+		if !catalog.ValidSlug(e.Slug) {
 			problems = append(problems, fmt.Errorf("taxon %d has the invalid slug %q: %w", e.TaxonID, e.Slug, ErrInvalidIndex))
 		}
 
-		if !sha256Pattern.MatchString(e.SHA256) {
+		if !catalog.ValidSHA256(e.SHA256) {
 			problems = append(problems, fmt.Errorf("taxon %d has the invalid checksum %q: %w", e.TaxonID, e.SHA256, ErrInvalidIndex))
 		}
 

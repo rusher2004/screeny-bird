@@ -82,6 +82,8 @@ func TestDirLoaderRejectsAnInconsistentIndex(t *testing.T) {
 		"bad slug":         fmt.Sprintf(good, entry("species/1001-../320x180.png", sum, "..")),
 		"short checksum":   fmt.Sprintf(good, entry(ok, "abc", "carolina-wren")),
 		"duplicate taxa":   fmt.Sprintf(good, entry(ok, sum, "carolina-wren")+","+entry(ok, sum, "carolina-wren")),
+		"zero taxon":       `{"height":180,"schema_version":1,"species":[{"path":"species/0-x/320x180.png","sha256":"` + sum + `","slug":"x","taxon_id":0}],"width":320}`,
+		"negative taxon":   `{"height":180,"schema_version":1,"species":[{"path":"species/-5-x/320x180.png","sha256":"` + sum + `","slug":"x","taxon_id":-5}],"width":320}`,
 		"uppercase digest": fmt.Sprintf(good, entry(ok, strings.Repeat("A", 64), "carolina-wren")),
 	}
 
@@ -170,5 +172,46 @@ func TestDirLoaderReadsOnlyPlainFilesInsideItsDirectory(t *testing.T) {
 
 	if _, err := loader.ReadAsset("species/" + fixtureSpecies[0] + "/link.png"); err == nil {
 		t.Error("ReadAsset() followed a symlink")
+	}
+}
+
+func TestDirLoaderRefusesASymlinkedOrOversizedIndex(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	if _, err := newDeriver(t, newStore(t, fixtureSpecies[:1]...), &recordingProgress{}, out).Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() error = %v", err)
+	}
+
+	loader := newLoader(t, out)
+	index := filepath.Join(out, "index.json")
+
+	real := filepath.Join(out, "real-index.json")
+	if err := os.Rename(index, real); err != nil {
+		t.Fatalf("moving index: %v", err)
+	}
+
+	if err := os.Symlink(real, index); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if _, err := loader.Load(); err == nil {
+		t.Error("Load() followed a symlinked index")
+	}
+
+	if _, err := loader.IndexVersion(); !errors.Is(err, catalog.ErrNotRegularFile) {
+		t.Errorf("IndexVersion() of a symlinked index error = %v, want ErrNotRegularFile", err)
+	}
+
+	if err := os.Remove(index); err != nil {
+		t.Fatalf("removing link: %v", err)
+	}
+
+	if err := os.WriteFile(index, make([]byte, 33<<20), 0o644); err != nil {
+		t.Fatalf("writing oversized index: %v", err)
+	}
+
+	if _, err := loader.Load(); err == nil {
+		t.Error("Load() read an index over the size limit")
 	}
 }

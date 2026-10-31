@@ -82,7 +82,7 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 
 	derived, err := derive.NewDirLoader(cfg.DerivedDir)
 	if err != nil {
-		return fmt.Errorf("creating derived loader: %w", err)
+		return fmt.Errorf("wiring derived images: %w", err)
 	}
 
 	srv, err := newServer(cfg, version, catalogs, derived, logger)

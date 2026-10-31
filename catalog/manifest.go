@@ -59,6 +59,17 @@ type assetRef struct {
 }
 
 // loadSpecies validates one species directory and returns its index entry.
+// ValidSlug reports whether s is a species slug: lowercase letters and digits
+// in groups joined by single hyphens.
+func ValidSlug(s string) bool {
+	return slugPattern.MatchString(s)
+}
+
+// ValidSHA256 reports whether s is a SHA-256 digest in lowercase hex.
+func ValidSHA256(s string) bool {
+	return sha256Pattern.MatchString(s)
+}
+
 func loadSpecies(fsys fs.FS, dir string) (Species, error) {
 	if err := checkSpeciesFiles(fsys, dir); err != nil {
 		return Species{}, err

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/rusher2004/screeny-bird/catalog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -132,6 +133,28 @@ func TestCatalogServesTheValidatedSpecies(t *testing.T) {
 
 	if len(raw.Species[0]) != 10 {
 		t.Errorf("species has %d fields, want exactly the 10 documented ones: %v", len(raw.Species[0]), raw.Species[0])
+	}
+
+	// Every field the catalog has is served, so a field added to catalog.Species
+	// cannot be dropped from the API unnoticed.
+	catalogJSON, err := json.Marshal(catalog.Species{})
+	if err != nil {
+		t.Fatalf("encoding a catalog species: %v", err)
+	}
+
+	var catalogFields map[string]any
+	if err := json.Unmarshal(catalogJSON, &catalogFields); err != nil {
+		t.Fatalf("decoding a catalog species: %v", err)
+	}
+
+	for field := range catalogFields {
+		if _, ok := raw.Species[0][field]; !ok {
+			t.Errorf("the catalog field %q is missing from the served species", field)
+		}
+	}
+
+	if len(raw.Species[0]) != len(catalogFields)+1 {
+		t.Errorf("served species has %d fields, want the catalog's %d plus derived", len(raw.Species[0]), len(catalogFields))
 	}
 
 	if derived, ok := raw.Species[0]["derived"].(map[string]any); !ok || len(derived) != 4 {
