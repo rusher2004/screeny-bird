@@ -22,7 +22,32 @@ func run(t *testing.T, opts commands.Options, args ...string) (output string, er
 	var buf bytes.Buffer
 	opts.Output = &buf
 
-	cmd, err := commands.New(opts)
+	// Tests that do not care about a dependency get an inert fake.
+	if opts.Configs == nil {
+		opts.Configs = &fakeConfigs{}
+	}
+
+	if opts.Catalogs == nil {
+		opts.Catalogs = &fakeCatalogs{}
+	}
+
+	cmd, err := commands.NewWith(opts)
+	if err != nil {
+		return "", err
+	}
+
+	err = cmd.Run(context.Background(), append([]string{"screeny"}, args...))
+
+	return buf.String(), err
+}
+
+// runProduction runs the command tree commands.New builds.
+func runProduction(t *testing.T, args ...string) (output string, err error) {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	cmd, err := commands.New(&buf)
 	if err != nil {
 		return "", err
 	}
@@ -60,16 +85,36 @@ func (f *fakeConfigs) LoadConfig(path string) (config.Config, error) {
 	return f.cfg, f.err
 }
 
-func TestNewRejectsMissingOutput(t *testing.T) {
+func TestNewWithRequiresEveryDependency(t *testing.T) {
 	t.Parallel()
 
-	cmd, err := commands.New(commands.Options{Version: "1.2.3"})
-	if err == nil {
-		t.Fatalf("New() = %v, want an error without an Output", cmd)
+	var buf bytes.Buffer
+
+	full := commands.Options{Output: &buf, Configs: &fakeConfigs{}, Catalogs: &fakeCatalogs{}}
+
+	tests := map[string]func(commands.Options) commands.Options{
+		"output":   func(o commands.Options) commands.Options { o.Output = nil; return o },
+		"configs":  func(o commands.Options) commands.Options { o.Configs = nil; return o },
+		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
 	}
 
-	if !errors.Is(err, commands.ErrMissingOption) || !strings.Contains(err.Error(), "output") {
-		t.Fatalf("New() error = %v, want ErrMissingOption naming output", err)
+	for name, drop := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd, err := commands.NewWith(drop(full))
+			if err == nil {
+				t.Fatalf("NewWith() = %v, want an error without %s", cmd, name)
+			}
+
+			if !errors.Is(err, commands.ErrMissingOption) || !strings.Contains(err.Error(), name) {
+				t.Fatalf("NewWith() error = %v, want ErrMissingOption naming %s", err, name)
+			}
+		})
+	}
+
+	if _, err := commands.NewWith(full); err != nil {
+		t.Fatalf("NewWith() with every dependency error = %v", err)
 	}
 }
 
@@ -91,7 +136,7 @@ func TestVersionPrintsTheVersion(t *testing.T) {
 func TestVersionFailsWhenTheBuildSetNone(t *testing.T) {
 	t.Parallel()
 
-	output, err := run(t, commands.Options{}, "version")
+	output, err := runProduction(t, "version")
 	if !errors.Is(err, commands.ErrNoVersion) {
 		t.Fatalf("Run(version) error = %v, want ErrNoVersion", err)
 	}
@@ -266,17 +311,17 @@ func TestCatalogValidateUsesTheRealConfigAndCatalogPackages(t *testing.T) {
 	valid := write("valid.toml", fmt.Sprintf("catalog_dir = %q\n", catalogDir))
 	emptyCatalog := write("empty.toml", fmt.Sprintf("catalog_dir = %q\n", t.TempDir()))
 
-	output, err := run(t, commands.Options{}, "catalog", "validate", "--config", valid)
+	output, err := runProduction(t, "catalog", "validate", "--config", valid)
 	if err != nil || output != "validated 0 species\n" {
 		t.Fatalf("Run() on a valid config and empty catalog = %q, %v; want %q", output, err, "validated 0 species\n")
 	}
 
-	_, err = run(t, commands.Options{}, "catalog", "validate", "--config", filepath.Join(configDir, "absent.toml"))
+	_, err = runProduction(t, "catalog", "validate", "--config", filepath.Join(configDir, "absent.toml"))
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Run() with a missing config file error = %v, want fs.ErrNotExist", err)
 	}
 
-	_, err = run(t, commands.Options{}, "catalog", "validate", "--config", emptyCatalog)
+	_, err = runProduction(t, "catalog", "validate", "--config", emptyCatalog)
 	if !errors.Is(err, catalog.ErrMissingFile) {
 		t.Fatalf("Run() on an empty directory error = %v, want catalog.ErrMissingFile", err)
 	}

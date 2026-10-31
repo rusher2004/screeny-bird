@@ -56,10 +56,9 @@ type catalogLoader interface {
 	LoadDir(dir string) (*catalog.Catalog, error)
 }
 
-// Options injects what the command tree depends on. Output is required: there
-// is no default. Version, Configs and Catalogs are test seams: a non-empty
-// Version replaces the build-time version, and nil loaders use the filesystem
-// implementations.
+// Options is everything the command tree depends on. Output, Configs and
+// Catalogs are required. Version is what the build reported; empty means the
+// build set none, and the version command then fails with ErrNoVersion.
 type Options struct {
 	Output   io.Writer
 	Version  string
@@ -67,26 +66,27 @@ type Options struct {
 	Catalogs catalogLoader
 }
 
-// New builds the root command. Run on the result returns every error,
+// New builds the production command tree: the real config and catalog loaders
+// and the version the build injected. Run on the result returns every error,
 // including usage errors, and never prints one or exits the process.
-func New(opts Options) (*cli.Command, error) {
-	if opts.Output == nil {
+func New(output io.Writer) (*cli.Command, error) {
+	return NewWith(Options{
+		Output:   output,
+		Version:  version,
+		Configs:  config.TOMLLoader{},
+		Catalogs: catalog.DirLoader{},
+	})
+}
+
+// NewWith builds the command tree from explicit dependencies.
+func NewWith(opts Options) (*cli.Command, error) {
+	switch {
+	case opts.Output == nil:
 		return nil, fmt.Errorf("building command tree: output: %w", ErrMissingOption)
-	}
-
-	catalogs := opts.Catalogs
-	if catalogs == nil {
-		catalogs = catalog.DirLoader{}
-	}
-
-	configs := opts.Configs
-	if configs == nil {
-		configs = config.TOMLLoader{}
-	}
-
-	shownVersion := opts.Version
-	if shownVersion == "" {
-		shownVersion = version
+	case opts.Configs == nil:
+		return nil, fmt.Errorf("building command tree: configs: %w", ErrMissingOption)
+	case opts.Catalogs == nil:
+		return nil, fmt.Errorf("building command tree: catalogs: %w", ErrMissingOption)
 	}
 
 	return &cli.Command{
@@ -134,12 +134,12 @@ func New(opts Options) (*cli.Command, error) {
 								return fmt.Errorf("%w: pass --%s with the path to the config file", ErrMissingSetting, configFlag)
 							}
 
-							cfg, err := configs.LoadConfig(path)
+							cfg, err := opts.Configs.LoadConfig(path)
 							if err != nil {
 								return fmt.Errorf("loading config: %w", err)
 							}
 
-							loaded, err := catalogs.LoadDir(cfg.CatalogDir)
+							loaded, err := opts.Catalogs.LoadDir(cfg.CatalogDir)
 							if err != nil {
 								return fmt.Errorf("validating catalog %q: %w", cfg.CatalogDir, err)
 							}
@@ -157,11 +157,11 @@ func New(opts Options) (*cli.Command, error) {
 				Name:  "version",
 				Usage: "Print the application version",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					if shownVersion == "" {
+					if opts.Version == "" {
 						return fmt.Errorf("reading the version: %w", ErrNoVersion)
 					}
 
-					if _, err := fmt.Fprintln(cmd.Root().Writer, shownVersion); err != nil {
+					if _, err := fmt.Fprintln(cmd.Root().Writer, opts.Version); err != nil {
 						return fmt.Errorf("writing version: %w", err)
 					}
 

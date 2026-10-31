@@ -18,7 +18,7 @@ func main() {
 
 // run executes the command line, writing command output to w.
 func run(ctx context.Context, args []string, w io.Writer) error {
-	cmd, err := commands.New(commands.Options{Output: w})
+	cmd, err := commands.New(w)
 	if err != nil {
 		return err
 	}
