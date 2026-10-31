@@ -18,7 +18,7 @@ A catalog of approved bird plates, one illustrated image and profile per species
 | `screeny version` | Print the version. | Done |
 | `screeny catalog validate` | Check the catalog against its rules. | Done |
 | `screeny catalog sync` | Add the species the upstream catalog has and the local one lacks. | Done |
-| `screeny catalog derive` | Build screensaver-sized images. | Planned |
+| `screeny catalog derive` | Build screensaver-sized images for the species that lack one. | Done |
 | `screeny serve` | Serve the validated catalog and images over HTTP. | Done |
 | `screeny healthcheck` | Exit zero only if the running server is healthy. | Done |
 
@@ -42,6 +42,8 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | --- | --- | --- |
 | `catalog_dir` | `catalog validate`, `catalog sync` | Directory holding the catalog's `index.json` and `species/`. |
 | `work_dir` | `catalog sync` | Scratch space for sync, on the same filesystem as `catalog_dir`. |
+| `derived_dir` | `catalog derive` | Where derived images are written. It must be outside `catalog_dir`. |
+| `derive_width`, `derive_height` | `catalog derive` | Pixel size of every derived image. They are never replaced, so changing the size means removing `derived_dir` first. |
 | `upstream_repo` | `catalog sync` | GitHub repository (`owner/name`) the catalog syncs from. |
 | `upstream_ref` | `catalog sync` | Branch or tag of that repository to follow. |
 | `upstream_timeout_seconds` | `catalog sync` | Seconds allowed for each request to the upstream repository. |
@@ -71,6 +73,12 @@ Fetch the catalog into the stack's data volume. The first sync downloads the who
 VERSION="$(cat VERSION)" docker compose run --rm sync
 ```
 
+Build the screensaver-sized images. Each upright portrait plate is scaled whole to fit `derive_width` by `derive_height` and padded with a solid color taken from its own border, so nothing is cropped. This takes a minute or two and logs one line per image. Derived images are never rewritten, so later runs only add the new species.
+
+```bash
+VERSION="$(cat VERSION)" docker compose run --rm derive
+```
+
 Start the server.
 
 ```bash
@@ -87,9 +95,9 @@ curl localhost:8080/healthz
 curl localhost:8080/v1/catalog
 ```
 
-To pick up new upstream species later, run the sync command again. The running server notices the change within `reload_interval_seconds`. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
+To pick up new upstream species later, run the sync command again, then derive. The running server notices the change within `reload_interval_seconds`. To stop, press Ctrl+C or run `docker compose down`, which keeps the catalog volume. Add `-v` to delete it.
 
-Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog validate` and `./screeny serve`.
+Without Docker, build the binary with a version and put the settings at `/etc/screeny/config.toml`, the one place it looks. Then run `./screeny catalog sync`, `./screeny catalog derive`, `./screeny catalog validate` and `./screeny serve`.
 
 ```bash
 go build -ldflags "-X main.version=$(cat VERSION)" -o screeny ./cmd
@@ -109,7 +117,7 @@ go build -ldflags "-X main.version=$(cat VERSION)" -o screeny ./cmd
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `derive` does not exist yet; it arrives with its command. `CLAUDE.md` describes the conventions the code follows.
+`CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 
