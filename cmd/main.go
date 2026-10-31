@@ -119,7 +119,17 @@ func newSyncer(cfg config.Config) (mirror.Syncer, error) {
 		return mirror.Syncer{}, fmt.Errorf("creating upstream source: %w", err)
 	}
 
-	syncer, err := mirror.NewSyncer(source, cfg.UpstreamRepo, cfg.UpstreamRef, cfg.CatalogDir, cfg.WorkDir)
+	retrier, err := upstream.NewRetrier(
+		source,
+		cfg.UpstreamAttempts,
+		time.Duration(cfg.UpstreamRetryDelaySeconds)*time.Second,
+		upstream.TimerSleeper{},
+	)
+	if err != nil {
+		return mirror.Syncer{}, fmt.Errorf("creating upstream retrier: %w", err)
+	}
+
+	syncer, err := mirror.NewSyncer(retrier, cfg.UpstreamRepo, cfg.UpstreamRef, cfg.CatalogDir, cfg.WorkDir)
 	if err != nil {
 		return mirror.Syncer{}, fmt.Errorf("creating syncer: %w", err)
 	}

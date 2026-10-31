@@ -34,6 +34,8 @@ work_dir = "/data/work"
 upstream_repo = "veteranbv/inky-bird-frame"
 upstream_ref = "main"
 upstream_timeout_seconds = 30
+upstream_attempts = 3
+upstream_retry_delay_seconds = 5
 listen_address = ":8080"
 read_header_timeout_seconds = 10
 write_timeout_seconds = 60
@@ -45,6 +47,7 @@ cors_allowed_origins = ["https://app.example.test"]
 
 var allSettings = []string{
 	"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds",
+	"upstream_attempts", "upstream_retry_delay_seconds",
 	"listen_address", "read_header_timeout_seconds", "write_timeout_seconds", "shutdown_timeout_seconds",
 	"reload_interval_seconds", "healthcheck_timeout_seconds", "cors_allowed_origins",
 }
@@ -64,6 +67,8 @@ func TestLoadReadsEverySetting(t *testing.T) {
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 30,
 
+		UpstreamAttempts:          3,
+		UpstreamRetryDelaySeconds: 5,
 		ListenAddress:             ":8080",
 		ReadHeaderTimeoutSeconds:  10,
 		WriteTimeoutSeconds:       60,
@@ -105,6 +110,8 @@ func TestLoadRequiresEverySetting(t *testing.T) {
 		"empty string":      strings.Replace(complete, `catalog_dir = "/data/catalog"`, `catalog_dir = ""`, 1),
 		"whitespace string": strings.Replace(complete, `work_dir = "/data/work"`, `work_dir = "   "`, 1),
 		"zero timeout":      strings.Replace(complete, "= 30", "= 0", 1),
+		"zero attempts":     strings.Replace(complete, "upstream_attempts = 3", "upstream_attempts = 0", 1),
+		"zero retry delay":  strings.Replace(complete, "upstream_retry_delay_seconds = 5", "upstream_retry_delay_seconds = 0", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -234,6 +241,8 @@ func TestLoadRejectsUnusableServerSettings(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct{ from, to, want string }{
+		"negative attempts":       {"upstream_attempts = 3", "upstream_attempts = -1", "upstream_attempts"},
+		"negative retry delay":    {"upstream_retry_delay_seconds = 5", "upstream_retry_delay_seconds = -1", "upstream_retry_delay_seconds"},
 		"negative write timeout":  {"write_timeout_seconds = 60", "write_timeout_seconds = -1", "write_timeout_seconds"},
 		"negative reload":         {"reload_interval_seconds = 60", "reload_interval_seconds = -1", "reload_interval_seconds"},
 		"listen without a port":   {`listen_address = ":8080"`, `listen_address = "localhost"`, "listen_address"},

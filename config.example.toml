@@ -15,6 +15,12 @@ upstream_ref = "main"
 # Seconds allowed for each request to the upstream repository.
 upstream_timeout_seconds = 30
 
+# How many times each upstream request is tried in all (counting the first), and
+# the seconds to wait between tries. A sync that still fails keeps what it
+# downloaded and resumes on the next run.
+upstream_attempts = 3
+upstream_retry_delay_seconds = 5
+
 # Address the HTTP server listens on, as host:port.
 listen_address = ":8080"
 

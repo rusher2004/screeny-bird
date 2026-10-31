@@ -25,12 +25,18 @@ func (b trackedBody) Close() error {
 	return nil
 }
 
+type erroringReader struct{ err error }
+
+func (r erroringReader) Read([]byte) (int, error) { return 0, r.err }
+
 type fakeDoer struct {
 	requests []*http.Request
 	status   int
 	body     []byte
 	err      error
-	closed   bool
+	// readErr, if set, makes reading the response body fail after body.
+	readErr error
+	closed  bool
 }
 
 func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
@@ -40,9 +46,14 @@ func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
 		return nil, f.err
 	}
 
+	var reader io.Reader = bytes.NewReader(f.body)
+	if f.readErr != nil {
+		reader = io.MultiReader(reader, erroringReader{err: f.readErr})
+	}
+
 	return &http.Response{
 		StatusCode: f.status,
-		Body:       trackedBody{Reader: bytes.NewReader(f.body), closed: &f.closed},
+		Body:       trackedBody{Reader: reader, closed: &f.closed},
 	}, nil
 }
 
@@ -290,5 +301,64 @@ func TestFetchWrapsTransportFailuresAndHonoursContext(t *testing.T) {
 
 	if doer.requests[0].Context().Value(key{}) != "marker" {
 		t.Error("request did not carry the caller's context")
+	}
+}
+
+func TestFailuresAreMarkedTransientOnlyWhenARetryCouldHelp(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		doer      *fakeDoer
+		transient bool
+	}{
+		"too many requests":   {doer: &fakeDoer{status: http.StatusTooManyRequests}, transient: true},
+		"internal error":      {doer: &fakeDoer{status: http.StatusInternalServerError}, transient: true},
+		"bad gateway":         {doer: &fakeDoer{status: http.StatusBadGateway}, transient: true},
+		"service unavailable": {doer: &fakeDoer{status: http.StatusServiceUnavailable}, transient: true},
+		"gateway timeout":     {doer: &fakeDoer{status: http.StatusGatewayTimeout}, transient: true},
+		"connection failure":  {doer: &fakeDoer{err: errors.New("connection reset")}, transient: true},
+		"body read failure":   {doer: &fakeDoer{status: http.StatusOK, body: []byte("par"), readErr: errors.New("stalled")}, transient: true},
+		"not found":           {doer: &fakeDoer{status: http.StatusNotFound}, transient: false},
+		"bad request":         {doer: &fakeDoer{status: http.StatusBadRequest}, transient: false},
+		"forbidden":           {doer: &fakeDoer{status: http.StatusForbidden}, transient: false},
+		"redirect":            {doer: &fakeDoer{status: http.StatusFound}, transient: false},
+		"oversize body":       {doer: &fakeDoer{status: http.StatusOK, body: bytes.Repeat([]byte{1}, 32<<20+1)}, transient: false},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, fetchErr := newSource(t, tt.doer).Fetch(context.Background(), commit, "catalog/index.json")
+			if fetchErr == nil {
+				t.Fatal("Fetch() error = nil, want failure")
+			}
+
+			if got := errors.Is(fetchErr, upstream.ErrTransient); got != tt.transient {
+				t.Errorf("Fetch() error %v: transient = %t, want %t", fetchErr, got, tt.transient)
+			}
+
+			_, resolveErr := newSource(t, tt.doer).ResolveRef(context.Background())
+			if got := errors.Is(resolveErr, upstream.ErrTransient); got != tt.transient {
+				t.Errorf("ResolveRef() error %v: transient = %t, want %t", resolveErr, got, tt.transient)
+			}
+		})
+	}
+}
+
+func TestACanceledRequestIsNeverTransient(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for name, doer := range map[string]*fakeDoer{
+		"transport failure": {err: context.Canceled},
+		"body read failure": {status: http.StatusOK, readErr: context.Canceled},
+	} {
+		_, err := newSource(t, doer).Fetch(ctx, commit, "catalog/index.json")
+		if err == nil || errors.Is(err, upstream.ErrTransient) {
+			t.Errorf("%s: Fetch() on a canceled context error = %v, want a non-transient failure", name, err)
+		}
 	}
 }

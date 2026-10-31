@@ -45,6 +45,8 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | `upstream_repo` | `catalog sync` | GitHub repository (`owner/name`) the catalog syncs from. |
 | `upstream_ref` | `catalog sync` | Branch or tag of that repository to follow. |
 | `upstream_timeout_seconds` | `catalog sync` | Seconds allowed for each request to the upstream repository. |
+| `upstream_attempts` | `catalog sync` | How many times each upstream request is tried in all, counting the first. |
+| `upstream_retry_delay_seconds` | `catalog sync` | Seconds to wait between those attempts. |
 | `listen_address` | `serve`, `healthcheck` | Address the HTTP server listens on, as `host:port`. |
 | `read_header_timeout_seconds` | `serve` | Seconds a client may take to send request headers. |
 | `write_timeout_seconds` | `serve` | Seconds allowed to write one response. |
@@ -63,7 +65,7 @@ Copy the example settings. `config.local.toml` is gitignored, and its `listen_ad
 cp config.example.toml config.local.toml
 ```
 
-Fetch the catalog into the stack's data volume. The first sync downloads the whole upstream catalog, about 1.1 GB, so it takes several minutes. A sync that fails publishes nothing, so run it again.
+Fetch the catalog into the stack's data volume. The first sync downloads the whole upstream catalog, about 1.1 GB, so it takes several minutes. A sync that fails publishes nothing but keeps what it downloaded, so run it again and it resumes where it stopped. That staging can take up to the same space in the data volume until a sync succeeds.
 
 ```bash
 VERSION="$(cat VERSION)" docker compose run --rm sync

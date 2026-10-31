@@ -32,6 +32,11 @@ type Config struct {
 	UpstreamRef string `toml:"upstream_ref"`
 	// UpstreamTimeoutSeconds bounds each request to the upstream repository.
 	UpstreamTimeoutSeconds int `toml:"upstream_timeout_seconds"`
+	// UpstreamAttempts is how many times a request to the upstream repository
+	// is tried in all, counting the first, before sync gives up on it.
+	UpstreamAttempts int `toml:"upstream_attempts"`
+	// UpstreamRetryDelaySeconds is the wait between those attempts.
+	UpstreamRetryDelaySeconds int `toml:"upstream_retry_delay_seconds"`
 	// ListenAddress is the host:port the HTTP server listens on, such as ":8080".
 	ListenAddress string `toml:"listen_address"`
 	// ReadHeaderTimeoutSeconds bounds how long a client may take to send request headers.
@@ -75,6 +80,8 @@ func (c Config) validate() error {
 		value int
 	}{
 		{"upstream_timeout_seconds", c.UpstreamTimeoutSeconds},
+		{"upstream_attempts", c.UpstreamAttempts},
+		{"upstream_retry_delay_seconds", c.UpstreamRetryDelaySeconds},
 		{"read_header_timeout_seconds", c.ReadHeaderTimeoutSeconds},
 		{"write_timeout_seconds", c.WriteTimeoutSeconds},
 		{"shutdown_timeout_seconds", c.ShutdownTimeoutSeconds},
