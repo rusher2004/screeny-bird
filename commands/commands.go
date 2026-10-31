@@ -80,13 +80,22 @@ func New(output io.Writer) (*cli.Command, error) {
 
 // NewWith builds the command tree from explicit dependencies.
 func NewWith(opts Options) (*cli.Command, error) {
-	switch {
-	case opts.Output == nil:
-		return nil, fmt.Errorf("building command tree: output: %w", ErrMissingOption)
-	case opts.Configs == nil:
-		return nil, fmt.Errorf("building command tree: configs: %w", ErrMissingOption)
-	case opts.Catalogs == nil:
-		return nil, fmt.Errorf("building command tree: catalogs: %w", ErrMissingOption)
+	var missing []error
+
+	if opts.Output == nil {
+		missing = append(missing, fmt.Errorf("output: %w", ErrMissingOption))
+	}
+
+	if opts.Configs == nil {
+		missing = append(missing, fmt.Errorf("configs: %w", ErrMissingOption))
+	}
+
+	if opts.Catalogs == nil {
+		missing = append(missing, fmt.Errorf("catalogs: %w", ErrMissingOption))
+	}
+
+	if err := errors.Join(missing...); err != nil {
+		return nil, fmt.Errorf("building command tree: %w", err)
 	}
 
 	return &cli.Command{

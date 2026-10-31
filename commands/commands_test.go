@@ -118,6 +118,21 @@ func TestNewWithRequiresEveryDependency(t *testing.T) {
 	}
 }
 
+func TestNewWithReportsEveryMissingDependency(t *testing.T) {
+	t.Parallel()
+
+	_, err := commands.NewWith(commands.Options{})
+	if !errors.Is(err, commands.ErrMissingOption) {
+		t.Fatalf("NewWith() error = %v, want ErrMissingOption", err)
+	}
+
+	for _, name := range []string{"output", "configs", "catalogs"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q does not name %s", err, name)
+		}
+	}
+}
+
 func TestVersionPrintsTheVersion(t *testing.T) {
 	t.Parallel()
 

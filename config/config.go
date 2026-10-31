@@ -22,12 +22,14 @@ type Config struct {
 	CatalogDir string `toml:"catalog_dir"`
 }
 
-// Validate reports the first required setting that is missing or empty.
-// Every loader calls it, whatever the source.
+// Validate reports every required setting that is missing or empty, joined
+// into one error. Every loader calls it, whatever the source.
 func (c Config) Validate() error {
+	var errs []error
+
 	if strings.TrimSpace(c.CatalogDir) == "" {
-		return fmt.Errorf("catalog_dir: %w", ErrMissingSetting)
+		errs = append(errs, fmt.Errorf("catalog_dir: %w", ErrMissingSetting))
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
