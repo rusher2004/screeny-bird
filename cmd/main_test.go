@@ -11,6 +11,7 @@ import (
 
 	"github.com/rusher2004/screeny-bird/commands"
 	"github.com/rusher2004/screeny-bird/config"
+	"github.com/rusher2004/screeny-bird/upstream"
 )
 
 type fakeLoader struct {
@@ -23,6 +24,17 @@ func (f *fakeLoader) Load() (config.Config, error) {
 	f.calls++
 
 	return f.cfg, f.err
+}
+
+// validConfig returns a complete config whose catalog is in catalogDir.
+func validConfig(catalogDir string) config.Config {
+	return config.Config{
+		CatalogDir:             catalogDir,
+		WorkDir:                filepath.Join(catalogDir, "..", "work"),
+		UpstreamRepo:           "veteranbv/inky-bird-frame",
+		UpstreamRef:            "main",
+		UpstreamTimeoutSeconds: 5,
+	}
 }
 
 // writeEmptyCatalog creates a valid catalog with no species and returns its directory.
@@ -46,7 +58,7 @@ func TestExecuteAndReport(t *testing.T) {
 	t.Parallel()
 
 	catalogDir := writeEmptyCatalog(t)
-	loaded := config.Config{CatalogDir: catalogDir}
+	loaded := validConfig(catalogDir)
 
 	tests := []struct {
 		name       string
@@ -75,7 +87,7 @@ func TestExecuteAndReport(t *testing.T) {
 		{
 			name:       "a blank catalog directory fails while building the loader",
 			version:    "1.2.3",
-			loader:     &fakeLoader{cfg: config.Config{CatalogDir: " "}},
+			loader:     &fakeLoader{cfg: config.Config{CatalogDir: " ", WorkDir: "w", UpstreamRepo: "a/b", UpstreamRef: "main", UpstreamTimeoutSeconds: 5}},
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
 			wantReport: "screeny: creating catalog loader: creating directory loader: catalog directory is required\n",
@@ -134,7 +146,10 @@ func TestExecuteLoadsTheRealTOMLFile(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "screeny.toml")
-	if err := os.WriteFile(path, []byte(fmt.Sprintf("catalog_dir = %q\n", writeEmptyCatalog(t))), 0o644); err != nil {
+
+	content := fmt.Sprintf("catalog_dir = %q\nwork_dir = %q\nupstream_repo = \"a/b\"\nupstream_ref = \"main\"\nupstream_timeout_seconds = 5\n",
+		writeEmptyCatalog(t), t.TempDir())
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
 
@@ -183,5 +198,26 @@ func TestReport(t *testing.T) {
 				t.Errorf("report() wrote %q, want %q", got, tt.wantReport)
 			}
 		})
+	}
+}
+
+func TestNewSyncerBuildsFromAValidConfig(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newSyncer(validConfig(t.TempDir())); err != nil {
+		t.Fatalf("newSyncer() error = %v", err)
+	}
+}
+
+func TestNewSyncerRejectsAnInvalidUpstream(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig(t.TempDir())
+	cfg.UpstreamRepo = "not a repo"
+	cfg.UpstreamRef = ""
+
+	_, err := newSyncer(cfg)
+	if !errors.Is(err, upstream.ErrInvalidSource) {
+		t.Fatalf("newSyncer() error = %v, want upstream.ErrInvalidSource", err)
 	}
 }

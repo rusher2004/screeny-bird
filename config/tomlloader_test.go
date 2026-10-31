@@ -27,42 +27,94 @@ func load(t *testing.T, content string) (config.Config, error) {
 	return loader.Load()
 }
 
+// complete is a config file with every setting; edit returns it with changes.
+const complete = `catalog_dir = "/data/catalog"
+work_dir = "/data/work"
+upstream_repo = "veteranbv/inky-bird-frame"
+upstream_ref = "main"
+upstream_timeout_seconds = 30
+`
+
 func TestLoadReadsEverySetting(t *testing.T) {
 	t.Parallel()
 
-	got, err := load(t, "# the catalog\ncatalog_dir = \"/data/catalog\"\n")
+	got, err := load(t, "# comments are fine\n"+complete)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if got.CatalogDir != "/data/catalog" {
-		t.Fatalf("Load().CatalogDir = %q, want /data/catalog", got.CatalogDir)
+	want := config.Config{
+		CatalogDir:             "/data/catalog",
+		WorkDir:                "/data/work",
+		UpstreamRepo:           "veteranbv/inky-bird-frame",
+		UpstreamRef:            "main",
+		UpstreamTimeoutSeconds: 30,
+	}
+	if got != want {
+		t.Fatalf("Load() = %+v, want %+v", got, want)
 	}
 }
 
 func TestLoadRequiresEverySetting(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]string{
-		"empty file":       "",
-		"key absent":       "# nothing here\n",
-		"empty value":      "catalog_dir = \"\"\n",
-		"whitespace value": "catalog_dir = \"   \"\n",
+	settings := []string{"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds"}
+
+	for _, missing := range settings {
+		t.Run("without "+missing, func(t *testing.T) {
+			t.Parallel()
+
+			var lines []string
+
+			for line := range strings.SplitSeq(strings.TrimSpace(complete), "\n") {
+				if !strings.HasPrefix(line, missing+" ") {
+					lines = append(lines, line)
+				}
+			}
+
+			_, err := load(t, strings.Join(lines, "\n")+"\n")
+			if !errors.Is(err, config.ErrMissingSetting) || !strings.Contains(err.Error(), missing) {
+				t.Fatalf("Load() error = %v, want ErrMissingSetting naming %s", err, missing)
+			}
+		})
 	}
 
-	for name, content := range tests {
+	for name, content := range map[string]string{
+		"empty string":      strings.Replace(complete, `catalog_dir = "/data/catalog"`, `catalog_dir = ""`, 1),
+		"whitespace string": strings.Replace(complete, `work_dir = "/data/work"`, `work_dir = "   "`, 1),
+		"zero timeout":      strings.Replace(complete, "= 30", "= 0", 1),
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := load(t, content)
-			if !errors.Is(err, config.ErrMissingSetting) {
+			if _, err := load(t, content); !errors.Is(err, config.ErrMissingSetting) {
 				t.Fatalf("Load() error = %v, want ErrMissingSetting", err)
 			}
-
-			if !strings.Contains(err.Error(), "catalog_dir") {
-				t.Errorf("error %q does not name the setting", err)
-			}
 		})
+	}
+}
+
+func TestLoadReportsEveryMissingSettingTogether(t *testing.T) {
+	t.Parallel()
+
+	_, err := load(t, "")
+	if !errors.Is(err, config.ErrMissingSetting) {
+		t.Fatalf("Load() error = %v, want ErrMissingSetting", err)
+	}
+
+	for _, name := range []string{"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q does not name %s", err, name)
+		}
+	}
+}
+
+func TestLoadRejectsANegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	_, err := load(t, strings.Replace(complete, "= 30", "= -5", 1))
+	if !errors.Is(err, config.ErrInvalidConfig) || !strings.Contains(err.Error(), "upstream_timeout_seconds") {
+		t.Fatalf("Load() error = %v, want ErrInvalidConfig naming upstream_timeout_seconds", err)
 	}
 }
 
@@ -70,10 +122,10 @@ func TestLoadRejectsInvalidFiles(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"unknown key":      "catalog_dir = \"/data\"\nlisten = \":8080\"\n",
+		"unknown key":      complete + "listen = \":8080\"\n",
 		"malformed TOML":   "catalog_dir = \n",
-		"wrong value type": "catalog_dir = 5\n",
-		"duplicate key":    "catalog_dir = \"/a\"\ncatalog_dir = \"/b\"\n",
+		"wrong value type": strings.Replace(complete, `catalog_dir = "/data/catalog"`, "catalog_dir = 5", 1),
+		"duplicate key":    complete + "catalog_dir = \"/b\"\n",
 	}
 
 	for name, content := range tests {
@@ -95,7 +147,7 @@ func TestLoadRejectsInvalidFiles(t *testing.T) {
 func TestLoadNamesTheUnknownKey(t *testing.T) {
 	t.Parallel()
 
-	_, err := load(t, "catalog_dir = \"/data\"\nlisten = \":8080\"\n")
+	_, err := load(t, complete+"listen = \":8080\"\n")
 	if err == nil || !strings.Contains(err.Error(), "listen") {
 		t.Fatalf("Load() error = %v, want it to name the unknown key listen", err)
 	}

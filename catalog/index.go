@@ -33,6 +33,26 @@ func indexOf(species []Species) index {
 	return listing
 }
 
+// marshal returns the canonical index.json bytes: sorted keys, two-space
+// indentation, no HTML escaping and a trailing newline.
+func (i index) marshal() ([]byte, error) {
+	if i.Species == nil {
+		i.Species = []Species{}
+	}
+
+	var buf bytes.Buffer
+
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+
+	if err := encoder.Encode(i); err != nil {
+		return nil, fmt.Errorf("encoding the index: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
 // checkIndex confirms index.json is exactly the projection of the manifests.
 func checkIndex(fsys fs.FS, want index) error {
 	raw, err := readFile(fsys, indexFile)
