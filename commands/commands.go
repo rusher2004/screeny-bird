@@ -35,10 +35,17 @@ type catalogLoader interface {
 	Load() (*catalog.Catalog, error)
 }
 
+// catalogSyncer is what the sync command needs: bring the local catalog up to
+// date and say which upstream commit that used and how many species it added.
+type catalogSyncer interface {
+	Sync(ctx context.Context) (commit string, added int, err error)
+}
+
 // Options is everything the command tree depends on. Every field is required.
 type Options struct {
 	Writer   io.Writer
 	Catalogs catalogLoader
+	Syncer   catalogSyncer
 	// Version is what the version command prints.
 	Version string
 }
@@ -55,6 +62,10 @@ func New(opts Options) (*cli.Command, error) {
 
 	if opts.Catalogs == nil {
 		missing = append(missing, fmt.Errorf("catalogs: %w", ErrMissingOption))
+	}
+
+	if opts.Syncer == nil {
+		missing = append(missing, fmt.Errorf("syncer: %w", ErrMissingOption))
 	}
 
 	if strings.TrimSpace(opts.Version) == "" {
@@ -95,6 +106,22 @@ func New(opts Options) (*cli.Command, error) {
 					return &ExitError{Code: ExitUsage, Msg: "usage: a catalog command is required"}
 				},
 				Commands: []*cli.Command{
+					{
+						Name:  "sync",
+						Usage: "Add the species the upstream catalog has and the local one lacks",
+						Action: func(ctx context.Context, _ *cli.Command) error {
+							commit, added, err := opts.Syncer.Sync(ctx)
+							if err != nil {
+								return fmt.Errorf("syncing catalog: %w", err)
+							}
+
+							if _, err := fmt.Fprintf(opts.Writer, "synced %d new species from %s\n", added, commit); err != nil {
+								return fmt.Errorf("writing sync result: %w", err)
+							}
+
+							return nil
+						},
+					},
 					{
 						Name:  "validate",
 						Usage: "Check the catalog against its rules",

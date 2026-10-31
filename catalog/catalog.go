@@ -102,13 +102,30 @@ func (c *Catalog) Species() []Species {
 	return slices.Clone(c.species)
 }
 
-// load validates every part of the catalog rooted at fsys and returns it. When
-// anything is wrong it returns no catalog and an error joining every problem
-// found, each species problem wrapped in a *SpeciesError.
+// load validates every part of the catalog rooted at fsys, including that
+// index.json matches the species, and returns it. When anything is wrong it
+// returns no catalog and an error joining every problem found, each species
+// problem wrapped in a *SpeciesError.
 func load(fsys fs.FS) (*Catalog, error) {
+	species, err := loadTree(fsys, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := checkIndex(fsys, indexOf(species)); err != nil {
+		return nil, fmt.Errorf("checking %s: %w", indexFile, err)
+	}
+
+	return &Catalog{species: species}, nil
+}
+
+// loadTree validates the catalog root and every species and returns the
+// species sorted. It does not check index.json's content; requireIndex says
+// whether the file must exist.
+func loadTree(fsys fs.FS, requireIndex bool) ([]Species, error) {
 	var errs []error
 
-	if err := checkRoot(fsys); err != nil {
+	if err := checkRoot(fsys, requireIndex); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -151,11 +168,7 @@ func load(fsys fs.FS) (*Catalog, error) {
 
 	sortSpecies(species)
 
-	if err := checkIndex(fsys, indexOf(species)); err != nil {
-		return nil, fmt.Errorf("checking %s: %w", indexFile, err)
-	}
-
-	return &Catalog{species: species}, nil
+	return species, nil
 }
 
 func sortSpecies(species []Species) {
@@ -168,8 +181,9 @@ func sortSpecies(species []Species) {
 	})
 }
 
-// checkRoot confirms the catalog root holds only the index and species root.
-func checkRoot(fsys fs.FS) error {
+// checkRoot confirms the catalog root holds only the index and species root,
+// and that index.json, when it must exist or does, is a plain file.
+func checkRoot(fsys fs.FS, requireIndex bool) error {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("reading catalog root: %w: %w", ErrMissingFile, err)
@@ -187,7 +201,9 @@ func checkRoot(fsys fs.FS) error {
 
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		errs = append(errs, fmt.Errorf("%s: %w", indexFile, ErrMissingFile))
+		if requireIndex {
+			errs = append(errs, fmt.Errorf("%s: %w", indexFile, ErrMissingFile))
+		}
 	case err != nil:
 		errs = append(errs, fmt.Errorf("inspecting %s: %w", indexFile, err))
 	case !info.Mode().IsRegular():

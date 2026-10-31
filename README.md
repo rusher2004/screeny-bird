@@ -17,7 +17,7 @@ A catalog of approved bird plates, one illustrated image and profile per species
 | --- | --- | --- |
 | `screeny version` | Print the version. | Done |
 | `screeny catalog validate` | Check the catalog against its rules. | Done |
-| `screeny catalog sync` | Fetch and verify the upstream catalog. | Planned |
+| `screeny catalog sync` | Add the species the upstream catalog has and the local one lacks. | Done |
 | `screeny catalog derive` | Build screensaver-sized images. | Planned |
 | `screeny serve` | Serve the catalog and images. | Planned |
 
@@ -29,7 +29,11 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 
 | Setting | Used by | Meaning |
 | --- | --- | --- |
-| `catalog_dir` | `catalog validate` | Directory holding the catalog's `index.json` and `species/`. |
+| `catalog_dir` | `catalog validate`, `catalog sync` | Directory holding the catalog's `index.json` and `species/`. |
+| `work_dir` | `catalog sync` | Scratch space for sync, on the same filesystem as `catalog_dir`. |
+| `upstream_repo` | `catalog sync` | GitHub repository (`owner/name`) the catalog syncs from. |
+| `upstream_ref` | `catalog sync` | Branch or tag of that repository to follow. |
+| `upstream_timeout_seconds` | `catalog sync` | Seconds allowed for each request to the upstream repository. |
 
 ## Packages
 
@@ -39,12 +43,13 @@ Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.exampl
 | `commands` | The command tree and the wiring that connects the other packages. |
 | `config` | Loading the settings file. |
 | `catalog` | Reading and validating species, manifests and the index. |
-| `upstream` | Fetching the source catalog. |
+| `upstream` | Reading the source catalog from GitHub at one commit. |
+| `mirror` | Adding the species the local catalog lacks. |
 | `derive` | Building screensaver-sized images. |
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `cmd`, `commands`, `config`, `catalog` and the `tools/repoaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `derive` and `server` do not exist yet; they arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 

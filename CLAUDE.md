@@ -11,8 +11,8 @@ These are review-blocking. They come from the owner's Go standards and, where no
 ### Configuration (overrides the standards brief)
 
 - **No defaults and no fallbacks, anywhere.** Every setting and every dependency is supplied explicitly by the caller; a constructor never replaces a missing one with a real implementation or a build variable. A missing or empty value is an error naming the setting, returned before any work starts, and every missing setting or dependency is reported together with `errors.Join`, not just the first. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
-- **`cmd/main.go` constructs every dependency.** It declares the `configLoader` interface it needs, builds `config.NewTOMLLoader` for the settings file, loads the settings, builds `catalog.NewDirLoader` from them, and passes the ready loaders to `commands.New`. While these are the only implementations, `main` assumes the settings file is at `/etc/screeny/config.toml`; when an alternative loader arrives (for example one reading the environment), `main` grows the flags it needs to choose between them. Because `main` loads config before building commands, every invocation, including `version`, needs the file.
-- **`commands` receives ready dependencies and knows nothing about config.** `commands.Options` is `Writer`, `Catalogs` and `Version`, all required. It declares its `catalogLoader`, a plain `Load()`: what locates the data, a directory, is held by the implementing struct and never appears in the interface.
+- **`cmd/main.go` constructs every dependency.** It declares the `configLoader` interface it needs, builds `config.NewTOMLLoader` for the settings file, loads the settings, builds `catalog.NewDirLoader` and the upstream source and `mirror.Syncer` from them, and passes the ready dependencies to `commands.New`. While these are the only implementations, `main` assumes the settings file is at `/etc/screeny/config.toml`; when an alternative loader arrives (for example one reading the environment), `main` grows the flags it needs to choose between them. Because `main` loads config before building commands, every invocation, including `version`, needs the file.
+- **`commands` receives ready dependencies and knows nothing about config.** `commands.Options` is `Writer`, `Catalogs`, `Syncer` and `Version`, all required. It declares its `catalogLoader`, a plain `Load()`: what locates the data, a directory, is held by the implementing struct and never appears in the interface.
 - **Loaders are concrete structs built by constructors that validate their argument:** `config.NewTOMLLoader(path)` and `catalog.NewDirLoader(dir)`. `config.TOMLLoader` decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` with a constructor and a `Load()` method.
 - **The version is injected, not discovered.** `main` owns the `version` variable the build sets with `-ldflags "-X main.version=<VERSION>"` and passes it to `commands.Options` as a required field. A binary built without it fails at startup with `ErrMissingOption` naming `version`; there is no fallback.
 - **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. Tests inject values and do not use the real environment.
@@ -54,7 +54,9 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 | No type-only files | `tools/repoaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
 | Review gate, location-free review, private fields and local paths, image size/format/metadata, checksums, unexpected files, symlinks, schema version, index matches manifests | `catalog` tests (`review_test`, `privacy_test`, `image_test`, `manifest_test`, `index_test`, `catalog_test`) |
-| Approved taxa are immutable; staged changes hold only the index and new species | Pending: M3 `upstream` sync |
+| Approved taxa are immutable: sync only adds, and refuses and reports a species that changed upstream or was renamed | `mirror` tests |
+| Sync is all-or-nothing: a failed download, validation or rebuild leaves the store untouched; one sync at a time | `mirror`, `fsutil` tests |
+| Upstream is read at one commit, and every download is checked against the upstream index; fetch paths and commits are validated | `upstream`, `mirror` tests |
 | Served assets are in the active catalog and verified first; CORS off by default; GET and HEAD are side-effect free; projection exposes no private data | Pending: M2 `server` |
 
 ### Docs
@@ -69,11 +71,12 @@ When a change affects commands, flags, exit codes or config keys, update `README
 | `commands/` | urfave/cli v3 command tree. `Run` returns every error. Declares the catalog loader it needs; the version is passed in. |
 | `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
 | `config/` | `Config` and its loaders. `NewTOMLLoader(path)` returns a `TOMLLoader` whose `Load()` reads the settings strictly from that TOML file: every setting required, unknown keys rejected, no defaults. |
-| `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `Load()` validates the whole catalog tree in that directory, including that `index.json` matches the manifests, and returns the species, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
+| `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `RebuildIndex()` validates the tree and atomically writes the canonical `index.json`, and whose `Load()` validates the whole catalog tree in that directory, including that `index.json` matches the manifests, and returns the species, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
-| `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |
+| `upstream/` | `Source` resolves a GitHub ref to one commit and fetches raw files at it. Declares the one-method HTTP client it needs; `main` builds it with no proxy, no redirects and the configured timeout. |
+| `mirror/` | `Syncer` adds the species a local store lacks: reads the upstream index at one commit, downloads and checks only what is missing into `work_dir`, validates it with `catalog`, publishes by rename and rebuilds the index, or rolls back. Never changes a species the store holds. |
 | `derive/` | (planned, M3) Deterministic screensaver-sized image derivatives. |
-| `fsutil/` | (planned) Atomic writes and a kernel-released advisory file lock (`unix` build tag). |
+| `fsutil/` | `WriteFileAtomic` and a kernel-released advisory file lock (`unix` build tag). |
 
 ## Targets
 

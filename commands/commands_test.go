@@ -34,12 +34,31 @@ type catalogLoader = interface {
 	Load() (*catalog.Catalog, error)
 }
 
+type fakeSyncer struct {
+	calls  int
+	commit string
+	added  int
+	err    error
+}
+
+func (f *fakeSyncer) Sync(context.Context) (string, int, error) {
+	f.calls++
+
+	return f.commit, f.added, f.err
+}
+
 func run(t *testing.T, catalogs catalogLoader, args ...string) (output string, err error) {
 	t.Helper()
 
 	var buf bytes.Buffer
 
-	cmd, err := commands.New(commands.Options{Writer: &buf, Catalogs: catalogs, Version: "1.2.3"})
+	return runWith(t, commands.Options{Writer: &buf, Catalogs: catalogs, Syncer: &fakeSyncer{}, Version: "1.2.3"}, &buf, args...)
+}
+
+func runWith(t *testing.T, opts commands.Options, buf *bytes.Buffer, args ...string) (output string, err error) {
+	t.Helper()
+
+	cmd, err := commands.New(opts)
 	if err != nil {
 		return "", err
 	}
@@ -54,11 +73,12 @@ func TestNewRequiresEveryDependency(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Version: "1.2.3"}
+	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Version: "1.2.3"}
 
 	tests := map[string]func(commands.Options) commands.Options{
 		"writer":   func(o commands.Options) commands.Options { o.Writer = nil; return o },
 		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
+		"syncer":   func(o commands.Options) commands.Options { o.Syncer = nil; return o },
 		"version":  func(o commands.Options) commands.Options { o.Version = "  "; return o },
 	}
 
@@ -90,7 +110,7 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"writer", "catalogs", "version"} {
+	for _, name := range []string{"writer", "catalogs", "syncer", "version"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -211,5 +231,45 @@ func TestCatalogValidateUsesTheRealCatalogPackage(t *testing.T) {
 	_, err = run(t, loaderFor(t.TempDir()), "catalog", "validate")
 	if !errors.Is(err, catalog.ErrMissingFile) {
 		t.Fatalf("Run() on an empty directory error = %v, want catalog.ErrMissingFile", err)
+	}
+}
+
+func TestCatalogSyncReportsWhatItAdded(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	syncer := &fakeSyncer{commit: "8bc988b239d7ffb7d7394b1e5ad174b90f18ae1e", added: 3}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: syncer, Version: "1.2.3"}
+
+	output, err := runWith(t, opts, &buf, "catalog", "sync")
+	if err != nil {
+		t.Fatalf("Run(catalog sync) error = %v", err)
+	}
+
+	if want := "synced 3 new species from 8bc988b239d7ffb7d7394b1e5ad174b90f18ae1e\n"; output != want {
+		t.Fatalf("output = %q, want %q", output, want)
+	}
+
+	if syncer.calls != 1 {
+		t.Fatalf("syncer ran %d times, want 1", syncer.calls)
+	}
+}
+
+func TestCatalogSyncWrapsAFailureAndPrintsNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	cause := errors.New("upstream changed")
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{err: cause}, Version: "1.2.3"}
+
+	output, err := runWith(t, opts, &buf, "catalog", "sync")
+	if !errors.Is(err, cause) {
+		t.Fatalf("Run() error = %v, want it to wrap %v", err, cause)
+	}
+
+	if output != "" {
+		t.Fatalf("Run() printed %q after a failure, want nothing", output)
 	}
 }

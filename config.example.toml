@@ -1,5 +1,16 @@
 # Every setting is required. There are no defaults: a missing or empty value
-# stops the command with an error naming the setting.
+# stops the command with an error naming the setting, and every missing setting
+# is reported together.
 
-# Directory holding the catalog's index.json and species/ (catalog validate).
+# Directory holding the catalog's index.json and species/.
 catalog_dir = "/data/catalog"
+
+# Scratch space for catalog sync, on the same filesystem as catalog_dir.
+work_dir = "/data/work"
+
+# GitHub repository (owner/name) and ref that catalog sync follows.
+upstream_repo = "veteranbv/inky-bird-frame"
+upstream_ref = "main"
+
+# Seconds allowed for each request to the upstream repository.
+upstream_timeout_seconds = 30
