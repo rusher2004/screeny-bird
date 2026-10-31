@@ -61,8 +61,6 @@ var (
 )
 
 var (
-	slugPattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 	requiredFiles = []string{manifestFile, portraitFile, displayFile}
@@ -253,13 +251,13 @@ func checkEntry(e entry) error {
 	switch {
 	case e.TaxonID <= 0:
 		return errors.New("taxon_id must be positive")
-	case !slugPattern.MatchString(e.Slug):
+	case !catalog.ValidSlug(e.Slug):
 		return fmt.Errorf("slug %q is not a slug", e.Slug)
 	case e.PortraitPath != path.Join("species", e.dir(), portraitFile):
 		return fmt.Errorf("portrait_path %q is not this species' portrait", e.PortraitPath)
 	case e.DisplayPath != path.Join("species", e.dir(), displayFile):
 		return fmt.Errorf("display_path %q is not this species' display image", e.DisplayPath)
-	case !sha256Pattern.MatchString(e.PortraitSHA256) || !sha256Pattern.MatchString(e.DisplaySHA256):
+	case !catalog.ValidSHA256(e.PortraitSHA256) || !catalog.ValidSHA256(e.DisplaySHA256):
 		return errors.New("checksums must be lowercase hex SHA-256")
 	}
 

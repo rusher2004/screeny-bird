@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rusher2004/screeny-bird/catalog"
+	"github.com/rusher2004/screeny-bird/derive"
 )
 
 const (
@@ -27,6 +28,11 @@ const (
 	// schemaVersion is the catalog schema version the API serves.
 	schemaVersion = 1
 )
+
+// ErrDerivedMismatch reports that the derived images and the catalog disagree
+// about a species: a derived image for one the catalog lacks, or under another
+// slug.
+var ErrDerivedMismatch = errors.New("derived images do not match the catalog")
 
 // ErrInvalidServer reports a server built without a required option or with an
 // unusable one.
@@ -40,6 +46,17 @@ type store interface {
 	// is replaced, so a change can be noticed without loading.
 	IndexVersion() (string, error)
 	// ReadAsset returns the bytes of one file inside the catalog directory.
+	ReadAsset(name string) ([]byte, error)
+}
+
+// derivedStore is what the server needs from the derived images on disk.
+type derivedStore interface {
+	// Load returns the validated derived index.
+	Load() (derive.Index, error)
+	// IndexVersion returns a token that changes whenever the derived index is
+	// replaced.
+	IndexVersion() (string, error)
+	// ReadAsset returns the bytes of one file inside the derived directory.
 	ReadAsset(name string) ([]byte, error)
 }
 
@@ -61,6 +78,7 @@ type accessLog interface {
 // Options is everything a server depends on. Every field is required.
 type Options struct {
 	Store    store
+	Derived  derivedStore
 	Listener listener
 	Ticker   ticker
 	Log      accessLog
@@ -100,6 +118,7 @@ func New(opts Options) (*Server, error) {
 		missing bool
 	}{
 		{"store", opts.Store == nil},
+		{"derived store", opts.Derived == nil},
 		{"listener", opts.Listener == nil},
 		{"ticker", opts.Ticker == nil},
 		{"log", opts.Log == nil},
@@ -147,28 +166,129 @@ func New(opts Options) (*Server, error) {
 // snapshot is one validated catalog, ready to serve.
 type snapshot struct {
 	indexVersion string
-	species      int
-	generatedAt  string
-	catalogJSON  []byte
-	catalogETag  string
+	// species is how many species are served: those with a derived image.
+	species int
+	// pending is how many catalog species are not served yet because derive
+	// has not made their image.
+	pending     int
+	generatedAt string
+	catalogJSON []byte
+	catalogETag string
 	// assets maps each served asset path to the SHA-256 the catalog declares.
 	assets map[string]string
+	// derived maps each served derived image path to its recorded SHA-256.
+	derived map[string]string
 }
 
 // catalogResponse is the JSON body of /v1/catalog. The field order is the
 // sorted key order.
 type catalogResponse struct {
-	GeneratedAt   *string           `json:"generated_at"`
-	SchemaVersion int               `json:"schema_version"`
-	Species       []catalog.Species `json:"species"`
+	GeneratedAt   *string         `json:"generated_at"`
+	SchemaVersion int             `json:"schema_version"`
+	Species       []servedSpecies `json:"species"`
 }
 
-// load validates the catalog and builds a snapshot of it. It reads the index
-// version first, so a change that lands during the load is noticed next time.
-func (s *Server) load() (*snapshot, error) {
-	version, err := s.opts.Store.IndexVersion()
+// servedSpecies is one species as the API serves it: the catalog's fields and
+// its derived image. The field order is the sorted key order.
+type servedSpecies struct {
+	ApprovedAt     string        `json:"approved_at"`
+	CommonName     string        `json:"common_name"`
+	Derived        servedDerived `json:"derived"`
+	DisplayPath    string        `json:"display_path"`
+	DisplaySHA256  string        `json:"display_sha256"`
+	PortraitPath   string        `json:"portrait_path"`
+	PortraitSHA256 string        `json:"portrait_sha256"`
+	ScientificName string        `json:"scientific_name"`
+	Slug           string        `json:"slug"`
+	TaxonID        int           `json:"taxon_id"`
+}
+
+// servedDerived is a species' screensaver-sized image.
+type servedDerived struct {
+	Height int    `json:"height"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Width  int    `json:"width"`
+}
+
+// joinDerived pairs every catalog species with its derived image. A species
+// derive has not reached yet is left out and counted as pending, so it is
+// served as soon as its image exists. A derived image for a species the
+// catalog lacks, or under a different slug, means the two disagree about what
+// exists, and every such mismatch is reported.
+func joinDerived(species []catalog.Species, idx derive.Index) (served []servedSpecies, pending int, err error) {
+	byTaxon := make(map[int]derive.Entry, len(idx.Species))
+	for _, e := range idx.Species {
+		byTaxon[e.TaxonID] = e
+	}
+
+	served = make([]servedSpecies, 0, len(species))
+
+	var problems []error
+
+	for _, sp := range species {
+		e, ok := byTaxon[sp.TaxonID]
+		if !ok {
+			pending++
+
+			continue
+		}
+
+		delete(byTaxon, sp.TaxonID)
+
+		if e.Slug != sp.Slug {
+			problems = append(problems, fmt.Errorf("derived image %s is for %q but the catalog names taxon %d %q: %w", e.Path, e.Slug, sp.TaxonID, sp.Slug, ErrDerivedMismatch))
+
+			continue
+		}
+
+		served = append(served, servedSpecies{
+			ApprovedAt:     sp.ApprovedAt,
+			CommonName:     sp.CommonName,
+			Derived:        servedDerived{Height: idx.Height, Path: e.Path, SHA256: e.SHA256, Width: idx.Width},
+			DisplayPath:    sp.DisplayPath,
+			DisplaySHA256:  sp.DisplaySHA256,
+			PortraitPath:   sp.PortraitPath,
+			PortraitSHA256: sp.PortraitSHA256,
+			ScientificName: sp.ScientificName,
+			Slug:           sp.Slug,
+			TaxonID:        sp.TaxonID,
+		})
+	}
+
+	for taxon, e := range byTaxon {
+		problems = append(problems, fmt.Errorf("derived image %s is for taxon %d, which the catalog lacks: %w", e.Path, taxon, ErrDerivedMismatch))
+	}
+
+	if err := errors.Join(problems...); err != nil {
+		return nil, 0, err
+	}
+
+	return served, pending, nil
+}
+
+// indexVersion is the token that changes when either index is replaced.
+func (s *Server) indexVersion() (string, error) {
+	catalogVersion, err := s.opts.Store.IndexVersion()
 	if err != nil {
-		return nil, fmt.Errorf("reading the index version: %w", err)
+		return "", fmt.Errorf("reading the index version: %w", err)
+	}
+
+	derivedVersion, err := s.opts.Derived.IndexVersion()
+	if err != nil {
+		return "", fmt.Errorf("reading the derived index version: %w", err)
+	}
+
+	return catalogVersion + "|" + derivedVersion, nil
+}
+
+// load validates the catalog and the derived index and builds a snapshot of
+// them. It reads the index versions first, so a change that lands during the
+// load is noticed next time.
+func (s *Server) load() (*snapshot, error) {
+	version, err := s.indexVersion()
+	if err != nil {
+		return nil, err
 	}
 
 	loaded, err := s.opts.Store.Load()
@@ -176,12 +296,17 @@ func (s *Server) load() (*snapshot, error) {
 		return nil, fmt.Errorf("loading the catalog: %w", err)
 	}
 
-	species := loaded.Species()
-	response := catalogResponse{SchemaVersion: schemaVersion, Species: species}
-
-	if response.Species == nil {
-		response.Species = []catalog.Species{}
+	idx, err := s.opts.Derived.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading the derived index: %w", err)
 	}
+
+	served, pending, err := joinDerived(loaded.Species(), idx)
+	if err != nil {
+		return nil, err
+	}
+
+	response := catalogResponse{SchemaVersion: schemaVersion, Species: served}
 
 	if latest, ok := loaded.GeneratedAt(); ok {
 		response.GeneratedAt = &latest
@@ -195,19 +320,22 @@ func (s *Server) load() (*snapshot, error) {
 	digest := sha256.Sum256(body)
 	snap := &snapshot{
 		indexVersion: version,
-		species:      len(species),
+		species:      len(served),
+		pending:      pending,
 		catalogJSON:  body,
 		catalogETag:  `"` + hex.EncodeToString(digest[:]) + `"`,
-		assets:       make(map[string]string, 2*len(species)),
+		assets:       make(map[string]string, 2*len(served)),
+		derived:      make(map[string]string, len(served)),
 	}
 
 	if response.GeneratedAt != nil {
 		snap.generatedAt = *response.GeneratedAt
 	}
 
-	for _, sp := range species {
+	for _, sp := range served {
 		snap.assets[sp.PortraitPath] = sp.PortraitSHA256
 		snap.assets[sp.DisplayPath] = sp.DisplaySHA256
+		snap.derived[sp.Derived.Path] = sp.Derived.SHA256
 	}
 
 	return snap, nil
@@ -286,7 +414,7 @@ func (s *Server) shutdown(ctx context.Context, srv *http.Server, served <-chan e
 // reload swaps in a changed catalog. It does nothing while the index is the
 // one it last looked at, and keeps the old catalog if the new one is invalid.
 func (s *Server) reload() {
-	version, err := s.opts.Store.IndexVersion()
+	version, err := s.indexVersion()
 	if err != nil {
 		s.reloadFailing.Store(true)
 

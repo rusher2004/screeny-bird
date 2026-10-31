@@ -80,7 +80,12 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 		return err
 	}
 
-	srv, err := newServer(cfg, version, catalogs, logger)
+	derived, err := derive.NewDirLoader(cfg.DerivedDir)
+	if err != nil {
+		return fmt.Errorf("wiring derived images: %w", err)
+	}
+
+	srv, err := newServer(cfg, version, catalogs, derived, logger)
 	if err != nil {
 		return err
 	}

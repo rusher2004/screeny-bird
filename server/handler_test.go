@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"github.com/rusher2004/screeny-bird/catalog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -78,8 +80,14 @@ func TestCatalogServesTheValidatedSpecies(t *testing.T) {
 		GeneratedAt   string `json:"generated_at"`
 		SchemaVersion int    `json:"schema_version"`
 		Species       []struct {
-			ApprovedAt     string `json:"approved_at"`
-			CommonName     string `json:"common_name"`
+			ApprovedAt string `json:"approved_at"`
+			CommonName string `json:"common_name"`
+			Derived    struct {
+				Height int    `json:"height"`
+				Path   string `json:"path"`
+				SHA256 string `json:"sha256"`
+				Width  int    `json:"width"`
+			} `json:"derived"`
 			DisplayPath    string `json:"display_path"`
 			DisplaySHA256  string `json:"display_sha256"`
 			PortraitPath   string `json:"portrait_path"`
@@ -107,6 +115,13 @@ func TestCatalogServesTheValidatedSpecies(t *testing.T) {
 		t.Fatalf("first species = %+v, does not match the fixture", first)
 	}
 
+	derivedPath := "species/" + wren + "/" + fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)
+	_, derivedSum := fileSum(t, filepath.Join(h.derivedDir, derivedPath))
+
+	if d := first.Derived; d.Path != derivedPath || d.SHA256 != derivedSum || d.Width != derivedWidth || d.Height != derivedHeight {
+		t.Fatalf("derived = %+v, want %s at %dx%d with its checksum", d, derivedPath, derivedWidth, derivedHeight)
+	}
+
 	// Exactly the documented projection: no private or extra fields.
 	var raw struct {
 		Species []map[string]any `json:"species"`
@@ -116,8 +131,34 @@ func TestCatalogServesTheValidatedSpecies(t *testing.T) {
 		t.Fatalf("decoding raw catalog: %v", err)
 	}
 
-	if len(raw.Species[0]) != 9 {
-		t.Errorf("species has %d fields, want exactly the 9 documented ones: %v", len(raw.Species[0]), raw.Species[0])
+	if len(raw.Species[0]) != 10 {
+		t.Errorf("species has %d fields, want exactly the 10 documented ones: %v", len(raw.Species[0]), raw.Species[0])
+	}
+
+	// Every field the catalog has is served, so a field added to catalog.Species
+	// cannot be dropped from the API unnoticed.
+	catalogJSON, err := json.Marshal(catalog.Species{})
+	if err != nil {
+		t.Fatalf("encoding a catalog species: %v", err)
+	}
+
+	var catalogFields map[string]any
+	if err := json.Unmarshal(catalogJSON, &catalogFields); err != nil {
+		t.Fatalf("decoding a catalog species: %v", err)
+	}
+
+	for field := range catalogFields {
+		if _, ok := raw.Species[0][field]; !ok {
+			t.Errorf("the catalog field %q is missing from the served species", field)
+		}
+	}
+
+	if len(raw.Species[0]) != len(catalogFields)+1 {
+		t.Errorf("served species has %d fields, want the catalog's %d plus derived", len(raw.Species[0]), len(catalogFields))
+	}
+
+	if derived, ok := raw.Species[0]["derived"].(map[string]any); !ok || len(derived) != 4 {
+		t.Errorf("derived = %v, want exactly path, sha256, width and height", raw.Species[0]["derived"])
 	}
 }
 
@@ -440,5 +481,143 @@ func TestEveryRequestIsLoggedWithoutItsQuery(t *testing.T) {
 		if strings.ContainsAny(e.path, "\x00\x01\x02\n\r") {
 			t.Errorf("logged a path with control characters: %q", e.path)
 		}
+	}
+}
+
+func derivedURL(name string) string {
+	return "/v1/derived/species/" + name + "/" + fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)
+}
+
+func TestDerivedServesVerifiedBytes(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+	file := filepath.Join(h.derivedDir, "species", wren, fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight))
+	want, digest := fileSum(t, file)
+
+	resp := h.get(derivedURL(wren))
+	if resp.status != http.StatusOK || string(resp.body) != string(want) {
+		t.Fatalf("GET %s = %d with %d bytes, want 200 with the %d byte file", derivedURL(wren), resp.status, len(resp.body), len(want))
+	}
+
+	if resp.header.Get("Content-Type") != "image/png" || resp.header.Get("ETag") != `"`+digest+`"` || resp.header.Get("Cache-Control") != "no-cache" {
+		t.Errorf("headers = %v, want image/png, the digest as ETag and no-cache", resp.header)
+	}
+
+	if resp := h.get(derivedURL(wren) + "?sha256=" + digest); resp.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Errorf("an addressed request got Cache-Control %q, want immutable", resp.header.Get("Cache-Control"))
+	}
+
+	reads := h.derivedReads.Load()
+
+	cond := h.do(http.MethodGet, derivedURL(wren), map[string]string{"If-None-Match": `"` + digest + `"`})
+	if cond.status != http.StatusNotModified || len(cond.body) != 0 || h.derivedReads.Load() != reads {
+		t.Errorf("conditional GET = %d with %d bytes and %d reads, want an empty 304 without reading", cond.status, len(cond.body), h.derivedReads.Load()-reads)
+	}
+}
+
+func TestDerivedRoutesServeOnlyListedDerivedImages(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{}, wren).start()
+
+	for name, path := range map[string]string{
+		"a catalog image":   "/v1/derived/species/" + wren + "/portrait.png",
+		"the derived index": "/v1/derived/index.json",
+		"another size":      "/v1/derived/species/" + wren + "/1x1.png",
+		"traversal":         "/v1/derived/../index.json",
+		"the lock file":     "/v1/derived/derive.lock",
+	} {
+		// The mux redirects a path that is not clean instead of serving it.
+		if resp := h.get(path); resp.status != http.StatusNotFound && resp.status != http.StatusTemporaryRedirect {
+			t.Errorf("GET %s (%s) = %d, want 404 or a redirect to the cleaned path", path, name, resp.status)
+		}
+	}
+
+	// A derived image is not a catalog asset, and a catalog image is not derived.
+	if resp := h.get("/v1/assets/species/" + wren + "/" + fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)); resp.status != http.StatusNotFound {
+		t.Errorf("GET of a derived image under /v1/assets/ = %d, want 404", resp.status)
+	}
+
+	if resp := h.do(http.MethodPost, derivedURL(wren), nil); resp.status != http.StatusMethodNotAllowed {
+		t.Errorf("POST of a derived image = %d, want 405", resp.status)
+	}
+
+	if resp := h.do(http.MethodHead, derivedURL(wren), nil); resp.status != http.StatusOK || len(resp.body) != 0 {
+		t.Errorf("HEAD of a derived image = %d with %d bytes, want 200 and no body", resp.status, len(resp.body))
+	}
+}
+
+func TestATamperedMissingOrSymlinkedDerivedImageIsNeverSent(t *testing.T) {
+	t.Parallel()
+
+	size := fmt.Sprintf("%dx%d.png", derivedWidth, derivedHeight)
+
+	tests := map[string]func(t *testing.T, file string){
+		"tampered": func(t *testing.T, file string) {
+			t.Helper()
+
+			if err := os.WriteFile(file, []byte("not the recorded image"), 0o644); err != nil {
+				t.Fatalf("tampering: %v", err)
+			}
+		},
+		"missing": func(t *testing.T, file string) {
+			t.Helper()
+
+			if err := os.Remove(file); err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+		},
+		"symlinked": func(t *testing.T, file string) {
+			t.Helper()
+
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("reading: %v", err)
+			}
+
+			target := filepath.Join(filepath.Dir(file), "copy.png")
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				t.Fatalf("writing copy: %v", err)
+			}
+
+			if err := os.Remove(file); err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+
+			if err := os.Symlink(target, file); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		},
+	}
+
+	for name, damage := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t, []string{}, wren).start()
+			damage(t, filepath.Join(h.derivedDir, "species", wren, size))
+
+			resp := h.get(derivedURL(wren))
+			if resp.status != http.StatusServiceUnavailable || strings.Contains(string(resp.body), "not the recorded image") {
+				t.Fatalf("GET of a %s derived image = %d %q, want 503 and no image bytes", name, resp.status, resp.body)
+			}
+		})
+	}
+}
+
+func TestDerivedImagesHonorCORSLikeCatalogImages(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, []string{"https://app.example.test"}, wren).start()
+
+	resp := h.do(http.MethodGet, derivedURL(wren), map[string]string{"Origin": "https://app.example.test"})
+	if got := resp.header.Get("Access-Control-Allow-Origin"); got != "https://app.example.test" {
+		t.Errorf("Allow-Origin = %q, want the listed origin", got)
+	}
+
+	resp = h.do(http.MethodGet, derivedURL(wren), map[string]string{"Origin": "https://other.example.test"})
+	if got := resp.header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Allow-Origin = %q for an unlisted origin, want none", got)
 	}
 }

@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -137,4 +138,26 @@ func TestLoadAcceptsOptionalCompanionFilesAndExtraManifestFields(t *testing.T) {
 	})
 
 	mustLoad(t, fsys)
+}
+
+func TestValidSlugAndSHA256(t *testing.T) {
+	t.Parallel()
+
+	for slug, want := range map[string]bool{
+		"carolina-wren": true, "wilson-s-plover": true, "a1": true,
+		"": false, "Carolina": false, "-a": false, "a-": false, "a--b": false, "a_b": false, "a/b": false,
+	} {
+		if got := catalog.ValidSlug(slug); got != want {
+			t.Errorf("ValidSlug(%q) = %v, want %v", slug, got, want)
+		}
+	}
+
+	for digest, want := range map[string]bool{
+		strings.Repeat("a", 64): true, strings.Repeat("0", 64): true,
+		"": false, strings.Repeat("a", 63): false, strings.Repeat("A", 64): false, strings.Repeat("g", 64): false,
+	} {
+		if got := catalog.ValidSHA256(digest); got != want {
+			t.Errorf("ValidSHA256(%q) = %v, want %v", digest, got, want)
+		}
+	}
 }
