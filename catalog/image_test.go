@@ -85,7 +85,7 @@ func TestLoadRejectsBadImages(t *testing.T) {
 				}
 			})
 
-			if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrInvalidImage) {
+			if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrInvalidImage) {
 				t.Fatalf("Load() error = %v, want ErrInvalidImage", err)
 			}
 		})
@@ -98,7 +98,7 @@ func TestLoadRejectsSymlinkedAsset(t *testing.T) {
 	fsys := build(t, []speciesFixture{wren}, nil)
 	fsys["species/1001-carolina-wren/display.png"] = &fstest.MapFile{Data: []byte("elsewhere"), Mode: fs.ModeSymlink}
 
-	if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrNotRegularFile) {
+	if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrNotRegularFile) {
 		t.Fatalf("Load() error = %v, want ErrNotRegularFile", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestLoadRejectsOversizedAsset(t *testing.T) {
 	huge := bytes.Repeat([]byte{0}, limit+1)
 	fsys := build(t, []speciesFixture{wren}, func(_ string, f *speciesFiles) { f.portrait = huge })
 
-	if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrInvalidImage) {
+	if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrInvalidImage) {
 		t.Fatalf("Load() error = %v, want ErrInvalidImage", err)
 	}
 }

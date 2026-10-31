@@ -2,8 +2,7 @@
 
 Inspired by [Inky Bird Frame]. The server and tooling behind a macOS and tvOS screensaver that shows field-journal plates of birds.
 
-> **Status: early scaffold.** The command tree builds and reports its version.
-> Catalog validation, syncing and serving are next.
+> **Status: early scaffold.** Catalog validation works. Syncing and serving are next.
 
 ## What it does
 
@@ -17,12 +16,20 @@ A catalog of approved bird plates, one illustrated image and profile per species
 | Command | Purpose | Status |
 | --- | --- | --- |
 | `screeny version` | Print the version. | Done |
-| `screeny catalog validate` | Check the catalog against its rules. | Planned |
+| `screeny catalog validate` | Check the catalog against its rules. | Done |
 | `screeny catalog sync` | Fetch and verify the upstream catalog. | Planned |
 | `screeny catalog derive` | Build screensaver-sized images. | Planned |
 | `screeny serve` | Serve the catalog and images. | Planned |
 
 Choosing which plate appears next belongs to the screensaver apps, not this service.
+
+## Configuration
+
+Settings are read from a TOML file at `/etc/screeny/config.toml`; [config.example.toml](config.example.toml) shows every one. All are required.
+
+| Setting | Used by | Meaning |
+| --- | --- | --- |
+| `catalog_dir` | `catalog validate` | Directory holding the catalog's `index.json` and `species/`. |
 
 ## Packages
 
@@ -30,13 +37,14 @@ Choosing which plate appears next belongs to the screensaver apps, not this serv
 | --- | --- |
 | `cmd` | The entry point. |
 | `commands` | The command tree and the wiring that connects the other packages. |
+| `config` | Loading the settings file. |
 | `catalog` | Reading and validating species, manifests and the index. |
 | `upstream` | Fetching the source catalog. |
 | `derive` | Building screensaver-sized images. |
 | `server` | The HTTP interface the apps use. |
 | `fsutil` | Safe file writes and locking. |
 
-Only `cmd`, `commands`, `catalog` and the `tools/ifaceaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
+Only `cmd`, `commands`, `config`, `catalog` and the `tools/repoaudit` repository checks exist so far; the rest arrive with the commands above. `CLAUDE.md` describes the conventions the code follows.
 
 ## Credit
 

@@ -10,54 +10,31 @@ import (
 	"slices"
 )
 
-// Index is the catalog's public listing, the content of index.json. The field
+// index is the catalog's public listing, the content of index.json. The field
 // order is the sorted JSON key order.
-type Index struct {
+type index struct {
 	// GeneratedAt is the latest approval time, or nil for an empty catalog.
 	GeneratedAt   *string   `json:"generated_at"`
 	SchemaVersion int       `json:"schema_version"`
 	Species       []Species `json:"species"`
 }
 
-// Index returns the index the catalog's manifests produce.
-func (c *Catalog) Index() Index {
-	index := Index{SchemaVersion: schemaVersion, Species: slices.Clone(c.species)}
-	if index.Species == nil {
-		index.Species = []Species{}
-	}
+// indexOf returns the index that the sorted species' manifests produce.
+func indexOf(species []Species) index {
+	listing := index{SchemaVersion: schemaVersion, Species: slices.Clone(species)}
 
-	for _, s := range c.species {
-		if index.GeneratedAt == nil || s.ApprovedAt > *index.GeneratedAt {
+	for _, s := range species {
+		if listing.GeneratedAt == nil || s.ApprovedAt > *listing.GeneratedAt {
 			approved := s.ApprovedAt
-			index.GeneratedAt = &approved
+			listing.GeneratedAt = &approved
 		}
 	}
 
-	return index
-}
-
-// JSON returns the canonical index.json bytes: sorted keys, two-space
-// indentation, no HTML escaping and a trailing newline.
-func (i Index) JSON() ([]byte, error) {
-	if i.Species == nil {
-		i.Species = []Species{}
-	}
-
-	var buf bytes.Buffer
-
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-
-	if err := encoder.Encode(i); err != nil {
-		return nil, fmt.Errorf("encoding the index: %w", err)
-	}
-
-	return buf.Bytes(), nil
+	return listing
 }
 
 // checkIndex confirms index.json is exactly the projection of the manifests.
-func checkIndex(fsys fs.FS, want Index) error {
+func checkIndex(fsys fs.FS, want index) error {
 	raw, err := readFile(fsys, indexFile)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrIndexMismatch, err)
@@ -76,7 +53,7 @@ func checkIndex(fsys fs.FS, want Index) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 
-	var got Index
+	var got index
 	if err := decoder.Decode(&got); err != nil {
 		return fmt.Errorf("decoding: %w: %w", ErrIndexMismatch, err)
 	}

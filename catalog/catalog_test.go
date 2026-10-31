@@ -249,10 +249,10 @@ func build(t *testing.T, species []speciesFixture, edit func(dir string, f *spec
 	return fsys
 }
 
-func mustLoad(t *testing.T, fsys fs.FS) *catalog.Catalog {
+func mustLoad(t *testing.T, fsys fstest.MapFS) *catalog.Catalog {
 	t.Helper()
 
-	got, err := catalog.Load(fsys)
+	got, err := loadFS(t, fsys)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -392,7 +392,7 @@ func TestLoadRejectsBadStructure(t *testing.T) {
 			fsys := build(t, []speciesFixture{wren}, nil)
 			tt.edit(fsys)
 
-			got, err := catalog.Load(fsys)
+			got, err := loadFS(t, fsys)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Load() error = %v, want %v", err, tt.want)
 			}
@@ -411,7 +411,7 @@ func TestLoadRejectsDuplicateTaxon(t *testing.T) {
 	twin.Slug = "carolina-wren-two"
 	twin.Common = "Carolina Wren Two"
 
-	_, err := catalog.Load(build(t, []speciesFixture{wren, twin}, nil))
+	_, err := loadFS(t, build(t, []speciesFixture{wren, twin}, nil))
 	if !errors.Is(err, catalog.ErrDuplicateTaxon) {
 		t.Fatalf("Load() error = %v, want ErrDuplicateTaxon", err)
 	}
@@ -426,7 +426,7 @@ func TestLoadReportsEveryBadSpecies(t *testing.T) {
 		}
 	})
 
-	_, err := catalog.Load(fsys)
+	_, err := loadFS(t, fsys)
 	if !errors.Is(err, catalog.ErrReviewNotPublishable) {
 		t.Fatalf("Load() error = %v, want ErrReviewNotPublishable", err)
 	}
@@ -449,7 +449,7 @@ func TestSpeciesErrorIdentifiesDirectory(t *testing.T) {
 		f.qualityReview()["passed"] = false
 	})
 
-	_, err := catalog.Load(fsys)
+	_, err := loadFS(t, fsys)
 
 	speciesErr, ok := errors.AsType[*catalog.SpeciesError](err)
 	if !ok {

@@ -1,4 +1,4 @@
-// Package commands holds the screeny command tree and its composition root.
+// Package commands holds the screeny command tree.
 package commands
 
 import (
@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/urfave/cli/v3"
+
+	"github.com/rusher2004/screeny-bird/catalog"
 )
 
 // ExitUsage is the exit code for a malformed command line.
@@ -27,31 +30,47 @@ func (e *ExitError) Error() string {
 	return e.Msg
 }
 
-// Options injects everything the command tree depends on. Every field is
-// required: there are no defaults.
-type Options struct {
-	Version string
-	Stdout  io.Writer
-	Stderr  io.Writer
+// catalogLoader loads the catalog a command validates.
+type catalogLoader interface {
+	Load() (*catalog.Catalog, error)
 }
 
-// New builds the root command. Run on the result returns every error,
-// including usage errors, and never prints one or exits the process.
+// Options is everything the command tree depends on. Every field is required.
+type Options struct {
+	Writer   io.Writer
+	Catalogs catalogLoader
+	// Version is what the version command prints.
+	Version string
+}
+
+// New builds the command tree from explicit dependencies. Run on the result
+// returns every error, including usage errors, and never prints one or exits
+// the process.
 func New(opts Options) (*cli.Command, error) {
-	switch {
-	case opts.Version == "":
-		return nil, fmt.Errorf("building command tree: version: %w", ErrMissingOption)
-	case opts.Stdout == nil:
-		return nil, fmt.Errorf("building command tree: stdout: %w", ErrMissingOption)
-	case opts.Stderr == nil:
-		return nil, fmt.Errorf("building command tree: stderr: %w", ErrMissingOption)
+	var missing []error
+
+	if opts.Writer == nil {
+		missing = append(missing, fmt.Errorf("writer: %w", ErrMissingOption))
+	}
+
+	if opts.Catalogs == nil {
+		missing = append(missing, fmt.Errorf("catalogs: %w", ErrMissingOption))
+	}
+
+	if strings.TrimSpace(opts.Version) == "" {
+		missing = append(missing, fmt.Errorf("version: %w", ErrMissingOption))
+	}
+
+	if err := errors.Join(missing...); err != nil {
+		return nil, fmt.Errorf("building command tree: %w", err)
 	}
 
 	return &cli.Command{
-		Name:      "screeny",
-		Usage:     "Validate, sync and serve the bird plate catalog",
-		Writer:    opts.Stdout,
-		ErrWriter: opts.Stderr,
+		Name:   "screeny",
+		Usage:  "Validate, sync and serve the bird plate catalog",
+		Writer: opts.Writer,
+		// The library must not print errors itself: main reports each one once.
+		ErrWriter: io.Discard,
 		// The caller owns printing and exit codes, so the library must neither
 		// print a returned error nor call os.Exit.
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},
@@ -70,10 +89,35 @@ func New(opts Options) (*cli.Command, error) {
 		},
 		Commands: []*cli.Command{
 			{
+				Name:  "catalog",
+				Usage: "Work with the plate catalog",
+				Action: func(context.Context, *cli.Command) error {
+					return &ExitError{Code: ExitUsage, Msg: "usage: a catalog command is required"}
+				},
+				Commands: []*cli.Command{
+					{
+						Name:  "validate",
+						Usage: "Check the catalog against its rules",
+						Action: func(context.Context, *cli.Command) error {
+							loaded, err := opts.Catalogs.Load()
+							if err != nil {
+								return fmt.Errorf("validating catalog: %w", err)
+							}
+
+							if _, err := fmt.Fprintf(opts.Writer, "validated %d species\n", len(loaded.Species())); err != nil {
+								return fmt.Errorf("writing validation result: %w", err)
+							}
+
+							return nil
+						},
+					},
+				},
+			},
+			{
 				Name:  "version",
 				Usage: "Print the application version",
-				Action: func(_ context.Context, cmd *cli.Command) error {
-					if _, err := fmt.Fprintln(cmd.Root().Writer, opts.Version); err != nil {
+				Action: func(context.Context, *cli.Command) error {
+					if _, err := fmt.Fprintln(opts.Writer, opts.Version); err != nil {
 						return fmt.Errorf("writing version: %w", err)
 					}
 

@@ -10,9 +10,13 @@ These are review-blocking. They come from the owner's Go standards and, where no
 
 ### Configuration (overrides the standards brief)
 
-- **No defaults, anywhere.** Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts. Flags declare no `Value`. Dockerfile and Compose set no `ENV` defaults.
-- **Only `cmd/` touches ambient state.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. `main` hands explicit values down. Tests inject values; they do not use the real environment.
-- Containers receive config from the runtime (Compose `env_file` in development, the orchestrator in production). Development and production use the same image path.
+- **No defaults and no fallbacks, anywhere.** Every setting and every dependency is supplied explicitly by the caller; a constructor never replaces a missing one with a real implementation or a build variable. A missing or empty value is an error naming the setting, returned before any work starts, and every missing setting or dependency is reported together with `errors.Join`, not just the first. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
+- **`cmd/main.go` constructs every dependency.** It declares the `configLoader` interface it needs, builds `config.NewTOMLLoader` for the settings file, loads the settings, builds `catalog.NewDirLoader` from them, and passes the ready loaders to `commands.New`. While these are the only implementations, `main` assumes the settings file is at `/etc/screeny/config.toml`; when an alternative loader arrives (for example one reading the environment), `main` grows the flags it needs to choose between them. Because `main` loads config before building commands, every invocation, including `version`, needs the file.
+- **`commands` receives ready dependencies and knows nothing about config.** `commands.Options` is `Writer`, `Catalogs` and `Version`, all required. It declares its `catalogLoader`, a plain `Load()`: what locates the data, a directory, is held by the implementing struct and never appears in the interface.
+- **Loaders are concrete structs built by constructors that validate their argument:** `config.NewTOMLLoader(path)` and `catalog.NewDirLoader(dir)`. `config.TOMLLoader` decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` with a constructor and a `Load()` method.
+- **The version is injected, not discovered.** `main` owns the `version` variable the build sets with `-ldflags "-X main.version=<VERSION>"` and passes it to `commands.Options` as a required field. A binary built without it fails at startup with `ErrMissingOption` naming `version`; there is no fallback.
+- **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. Tests inject values and do not use the real environment.
+- Containers receive the config file the same way in development and production, as a mounted file at `/etc/screeny/config.toml`.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
 
 ### Errors
@@ -26,14 +30,15 @@ These are review-blocking. They come from the owner's Go standards and, where no
 
 ### Interfaces
 
-- The consumer declares the smallest interface it needs, in its own package, next to the code that uses it. Producer packages export concrete types and no interfaces. Accept interfaces, return structs. Factories return an untyped `nil, err`, never a typed nil in an interface.
+- Follow dependency inversion. The package that uses a capability declares the smallest interface it needs, next to the code that uses it, with exactly the methods it calls. Implementations are concrete types that do not declare interfaces for their callers. Accept interfaces, return structs. Factories return an untyped `nil, err`, never a typed nil in an interface.
+- Any package may consume capabilities from some packages and provide them to others. No package is classified or restricted by role; the question in review is whether each dependency is injected through an interface its consumer declared.
 - No file exists only to declare types, and no `*_iface.go`.
-- `commands` is the composition root. It adapts producers to the interfaces it needs. Command code has no system-specific branching.
-- `tools/ifaceaudit` enforces this mechanically. Its producer list lives in `tools/ifaceaudit/main.go`; update it when adding a producer package.
+- `commands` is the composition root. It adapts implementations to the interfaces it needs. Command code has no system-specific branching.
+- Dependency inversion cannot be checked mechanically, so it is a review judgment. `tools/repoaudit` checks only the mechanical rules.
 
 ### Tests
 
-- Tests run from outside the package: `foo_test.go` is `package foo_test`. Never test unexported identifiers. If something cannot be tested through the exported API, fix the API; never export only for a test. `package main` is the exception (it cannot be imported), as is `tools/ifaceaudit`, which is a `package main`.
+- Tests run from outside the package: `foo_test.go` is `package foo_test`. Never test unexported identifiers. If something cannot be tested through the exported API, fix the API; never export only for a test. `package main` is the exception (it cannot be imported), as is `tools/repoaudit`, which is a `package main`.
 - One `x_test.go` per `x.go`; none without its source file. `testdata/` is not a test file.
 - Tests never run real subprocesses, make real network calls, read the real environment, or write outside `t.TempDir()`. Inject the clock, process runner and other seams. Use `t.Setenv` only in `package main` tests.
 - Write the test first. Code that decides a risky or irreversible action (parsing, gating, policy, expiry) is fully covered.
@@ -44,9 +49,9 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 | Rule | Test |
 | --- | --- |
-| No ambient env/home/config access outside `cmd/` | `tools/ifaceaudit` `TestRepository` |
-| No flag defaults in `commands` | `tools/ifaceaudit` `TestRepository` |
-| No type-only files or producer interfaces | `tools/ifaceaudit` `TestRepository` |
+| No ambient env/home/config access outside `cmd/`; `cmd/` reads only named keys, never `os.Environ` or implicit directories | `tools/repoaudit` `TestRepository` |
+| No flag defaults in `commands` | `tools/repoaudit` `TestRepository` |
+| No type-only files | `tools/repoaudit` `TestRepository` |
 | Usage errors exit 2, others exit 1 | `commands_test`, `cmd/main_test` |
 | Review gate, location-free review, private fields and local paths, image size/format/metadata, checksums, unexpected files, symlinks, schema version, index matches manifests | `catalog` tests (`review_test`, `privacy_test`, `image_test`, `manifest_test`, `index_test`, `catalog_test`) |
 | Approved taxa are immutable; staged changes hold only the index and new species | Pending: M3 `upstream` sync |
@@ -54,16 +59,17 @@ The rules in `.claude/review.md` under "Safety rules" must never be broken. Each
 
 ### Docs
 
-When a change affects commands, flags, exit codes or config keys, update `README.md` and this file in the same change. The first setting adds a `.env.example` listing the required keys, and later settings keep it current. Architecture changes update the package table. Release-significant changes (non-test Go, `go.mod`, `go.sum`, `.goreleaser.yaml`, `Dockerfile`) require a strictly higher `VERSION`; CI enforces it.
+When a change affects commands, flags, exit codes or config keys, update `README.md`, `config.example.toml` and this file in the same change. Architecture changes update the package table. Release-significant changes (non-test Go, `go.mod`, `go.sum`, `.goreleaser.yaml`, `Dockerfile`) require a strictly higher `VERSION`; CI enforces it.
 
 ## Packages
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. The one place errors are printed and exit codes chosen. Reads no config yet; when it does, it is the only reader of ambient state. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. |
-| `tools/ifaceaudit/` | AST audit for the structural and configuration rules above. |
-| `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. |
+| `cmd/` | `main`. Loads the settings file, constructs the loaders from it, runs `commands`, prints the returned error once and maps the exit code. |
+| `commands/` | urfave/cli v3 command tree. `Run` returns every error. Declares the catalog loader it needs; the version is passed in. |
+| `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
+| `config/` | `Config` and its loaders. `NewTOMLLoader(path)` returns a `TOMLLoader` whose `Load()` reads the settings strictly from that TOML file: every setting required, unknown keys rejected, no defaults. |
+| `catalog/` | `NewDirLoader(dir)` returns a `DirLoader` whose `Load()` validates the whole catalog tree in that directory, including that `index.json` matches the manifests, and returns the species, or an error joining every problem found. Sentinel errors name the rule broken. Per-file limit 32 MiB. The loading logic is unexported: `DirLoader` is the one entry point, and tests reach every case through it. |
 | `server/` | (planned, M2) HTTP handlers for `/healthz`, `/v1/catalog`, `/v1/assets/`. |
 | `upstream/` | (planned, M3) HTTPS client for the source catalog; explicit transport and proxy. |
 | `derive/` | (planned, M3) Deterministic screensaver-sized image derivatives. |
@@ -91,7 +97,7 @@ Build and smoke-test the image. The version is a required build argument:
 
 ```bash
 docker build --build-arg VERSION="$(cat VERSION)" -t screeny:dev .
-docker run --rm screeny:dev version
+docker run --rm -v "$PWD/config.example.toml:/etc/screeny/config.toml:ro" screeny:dev version
 ```
 
 The committed `.claude/settings.json` hooks run `gofmt -w` on edited Go files and `go fmt ./... && go fix ./...` when a turn ends.

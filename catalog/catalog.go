@@ -2,8 +2,8 @@
 //
 // A catalog is a directory tree: an index.json and, under species/, one
 // directory per species holding a manifest, a portrait, a display image and
-// optional companion JSON. Load validates the whole tree and refuses to return
-// a partial result.
+// optional companion JSON. DirLoader validates the whole tree and refuses to
+// return a partial result.
 package catalog
 
 import (
@@ -102,10 +102,10 @@ func (c *Catalog) Species() []Species {
 	return slices.Clone(c.species)
 }
 
-// Load validates every part of the catalog rooted at fsys and returns it. When
+// load validates every part of the catalog rooted at fsys and returns it. When
 // anything is wrong it returns no catalog and an error joining every problem
 // found, each species problem wrapped in a *SpeciesError.
-func Load(fsys fs.FS) (*Catalog, error) {
+func load(fsys fs.FS) (*Catalog, error) {
 	var errs []error
 
 	if err := checkRoot(fsys); err != nil {
@@ -151,12 +151,11 @@ func Load(fsys fs.FS) (*Catalog, error) {
 
 	sortSpecies(species)
 
-	loaded := &Catalog{species: species}
-	if err := checkIndex(fsys, loaded.Index()); err != nil {
+	if err := checkIndex(fsys, indexOf(species)); err != nil {
 		return nil, fmt.Errorf("checking %s: %w", indexFile, err)
 	}
 
-	return loaded, nil
+	return &Catalog{species: species}, nil
 }
 
 func sortSpecies(species []Species) {
