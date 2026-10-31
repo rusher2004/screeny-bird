@@ -1,0 +1,53 @@
+{
+  "approved_at": "2026-07-01T10:00:00+00:00",
+  "assets": {
+    "display": {
+      "filename": "display.png",
+      "sha256": "8407df05869fcdbe13cc96e161e31fddfc0b2eccb17c2a12a117f38cf8474a00"
+    },
+    "portrait": {
+      "filename": "portrait.png",
+      "sha256": "ebbb8a3fe2fdb361d294299502d9f28ef35ed89da3bec2b5c27111aaf8903571"
+    }
+  },
+  "common_name": "Carolina Wren",
+  "generation": {
+    "attempt": 1,
+    "generated_at": "2026-07-01T10:00:00+00:00",
+    "generator": "fixture",
+    "max_attempts": 3,
+    "prompt_version": "field-journal-v6"
+  },
+  "profile": {
+    "habitat": "Fixture habitat",
+    "taxon_id": 1001
+  },
+  "quality_review": {
+    "anatomy_accuracy": 5,
+    "composition_quality": 5,
+    "correction_findings": [],
+    "findings": [
+      "Fixture review."
+    ],
+    "location_free": true,
+    "passed": true,
+    "species_accuracy": 5,
+    "text_accuracy": 5,
+    "verification_sources": [
+      {
+        "title": "Source one",
+        "url": "https://example.test/one"
+      },
+      {
+        "title": "Source two",
+        "url": "https://example.test/two"
+      }
+    ]
+  },
+  "references": [],
+  "schema_version": 1,
+  "scientific_name": "Thryothorus ludovicianus",
+  "slug": "carolina-wren",
+  "status": "approved",
+  "taxon_id": 1001
+}

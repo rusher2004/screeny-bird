@@ -14,3 +14,24 @@ upstream_ref = "main"
 
 # Seconds allowed for each request to the upstream repository.
 upstream_timeout_seconds = 30
+
+# Address the HTTP server listens on, as host:port.
+listen_address = ":8080"
+
+# Seconds a client may take to send request headers, and the server to write
+# one response.
+read_header_timeout_seconds = 10
+write_timeout_seconds = 60
+
+# Seconds in-flight requests get to finish when the server shuts down.
+shutdown_timeout_seconds = 15
+
+# Seconds between checks for a changed catalog while serving.
+reload_interval_seconds = 60
+
+# Seconds allowed for the healthcheck command's request.
+healthcheck_timeout_seconds = 5
+
+# Browser origins (scheme://host[:port]) allowed to read the catalog and
+# images. An empty list allows none; native apps do not need CORS.
+cors_allowed_origins = []

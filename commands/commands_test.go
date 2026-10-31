@@ -47,12 +47,36 @@ func (f *fakeSyncer) Sync(context.Context) (string, int, error) {
 	return f.commit, f.added, f.err
 }
 
+type fakeServer struct {
+	calls int
+	err   error
+	ctx   context.Context
+}
+
+func (f *fakeServer) Serve(ctx context.Context) error {
+	f.calls++
+	f.ctx = ctx
+
+	return f.err
+}
+
+type fakeProber struct {
+	calls int
+	err   error
+}
+
+func (f *fakeProber) Probe(context.Context) error {
+	f.calls++
+
+	return f.err
+}
+
 func run(t *testing.T, catalogs catalogLoader, args ...string) (output string, err error) {
 	t.Helper()
 
 	var buf bytes.Buffer
 
-	return runWith(t, commands.Options{Writer: &buf, Catalogs: catalogs, Syncer: &fakeSyncer{}, Version: "1.2.3"}, &buf, args...)
+	return runWith(t, commands.Options{Writer: &buf, Catalogs: catalogs, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}, &buf, args...)
 }
 
 func runWith(t *testing.T, opts commands.Options, buf *bytes.Buffer, args ...string) (output string, err error) {
@@ -73,12 +97,14 @@ func TestNewRequiresEveryDependency(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Version: "1.2.3"}
+	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	tests := map[string]func(commands.Options) commands.Options{
 		"writer":   func(o commands.Options) commands.Options { o.Writer = nil; return o },
 		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
 		"syncer":   func(o commands.Options) commands.Options { o.Syncer = nil; return o },
+		"server":   func(o commands.Options) commands.Options { o.Server = nil; return o },
+		"prober":   func(o commands.Options) commands.Options { o.Prober = nil; return o },
 		"version":  func(o commands.Options) commands.Options { o.Version = "  "; return o },
 	}
 
@@ -110,7 +136,7 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"writer", "catalogs", "syncer", "version"} {
+	for _, name := range []string{"writer", "catalogs", "syncer", "server", "prober", "version"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -240,7 +266,7 @@ func TestCatalogSyncReportsWhatItAdded(t *testing.T) {
 	var buf bytes.Buffer
 
 	syncer := &fakeSyncer{commit: "8bc988b239d7ffb7d7394b1e5ad174b90f18ae1e", added: 3}
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: syncer, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: syncer, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	output, err := runWith(t, opts, &buf, "catalog", "sync")
 	if err != nil {
@@ -262,7 +288,7 @@ func TestCatalogSyncWrapsAFailureAndPrintsNothing(t *testing.T) {
 	var buf bytes.Buffer
 
 	cause := errors.New("upstream changed")
-	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{err: cause}, Version: "1.2.3"}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{err: cause}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
 
 	output, err := runWith(t, opts, &buf, "catalog", "sync")
 	if !errors.Is(err, cause) {
@@ -271,5 +297,58 @@ func TestCatalogSyncWrapsAFailureAndPrintsNothing(t *testing.T) {
 
 	if output != "" {
 		t.Fatalf("Run() printed %q after a failure, want nothing", output)
+	}
+}
+
+func TestServeRunsTheServerUntilItReturns(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	srv := &fakeServer{}
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: srv, Prober: &fakeProber{}, Version: "1.2.3"}
+
+	if _, err := runWith(t, opts, &buf, "serve"); err != nil {
+		t.Fatalf("Run(serve) error = %v", err)
+	}
+
+	if srv.calls != 1 || srv.ctx == nil {
+		t.Fatalf("server ran %d times with context %v, want once with the command's context", srv.calls, srv.ctx)
+	}
+}
+
+func TestServeWrapsAServerFailure(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	cause := errors.New("address in use")
+	opts := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{err: cause}, Prober: &fakeProber{}, Version: "1.2.3"}
+
+	if _, err := runWith(t, opts, &buf, "serve"); !errors.Is(err, cause) {
+		t.Fatalf("Run(serve) error = %v, want it to wrap %v", err, cause)
+	}
+}
+
+func TestHealthcheckPrintsOkOnlyWhenHealthy(t *testing.T) {
+	t.Parallel()
+
+	var healthy bytes.Buffer
+
+	opts := commands.Options{Writer: &healthy, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{}, Version: "1.2.3"}
+
+	output, err := runWith(t, opts, &healthy, "healthcheck")
+	if err != nil || output != "ok\n" {
+		t.Fatalf("Run(healthcheck) = %q, %v; want ok", output, err)
+	}
+
+	var sick bytes.Buffer
+
+	cause := errors.New("answered 503")
+	opts = commands.Options{Writer: &sick, Catalogs: &fakeCatalogs{}, Syncer: &fakeSyncer{}, Server: &fakeServer{}, Prober: &fakeProber{err: cause}, Version: "1.2.3"}
+
+	output, err = runWith(t, opts, &sick, "healthcheck")
+	if !errors.Is(err, cause) || output != "" {
+		t.Fatalf("Run(healthcheck) = %q, %v; want no output and an error wrapping %v", output, err, cause)
 	}
 }

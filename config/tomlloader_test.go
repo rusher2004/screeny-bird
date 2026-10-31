@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,7 +34,20 @@ work_dir = "/data/work"
 upstream_repo = "veteranbv/inky-bird-frame"
 upstream_ref = "main"
 upstream_timeout_seconds = 30
+listen_address = ":8080"
+read_header_timeout_seconds = 10
+write_timeout_seconds = 60
+shutdown_timeout_seconds = 15
+reload_interval_seconds = 60
+healthcheck_timeout_seconds = 5
+cors_allowed_origins = ["https://app.example.test"]
 `
+
+var allSettings = []string{
+	"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds",
+	"listen_address", "read_header_timeout_seconds", "write_timeout_seconds", "shutdown_timeout_seconds",
+	"reload_interval_seconds", "healthcheck_timeout_seconds", "cors_allowed_origins",
+}
 
 func TestLoadReadsEverySetting(t *testing.T) {
 	t.Parallel()
@@ -49,8 +63,16 @@ func TestLoadReadsEverySetting(t *testing.T) {
 		UpstreamRepo:           "veteranbv/inky-bird-frame",
 		UpstreamRef:            "main",
 		UpstreamTimeoutSeconds: 30,
+
+		ListenAddress:             ":8080",
+		ReadHeaderTimeoutSeconds:  10,
+		WriteTimeoutSeconds:       60,
+		ShutdownTimeoutSeconds:    15,
+		ReloadIntervalSeconds:     60,
+		HealthcheckTimeoutSeconds: 5,
+		CORSAllowedOrigins:        []string{"https://app.example.test"},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
 	}
 }
@@ -58,7 +80,7 @@ func TestLoadReadsEverySetting(t *testing.T) {
 func TestLoadRequiresEverySetting(t *testing.T) {
 	t.Parallel()
 
-	settings := []string{"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds"}
+	settings := allSettings
 
 	for _, missing := range settings {
 		t.Run("without "+missing, func(t *testing.T) {
@@ -102,7 +124,7 @@ func TestLoadReportsEveryMissingSettingTogether(t *testing.T) {
 		t.Fatalf("Load() error = %v, want ErrMissingSetting", err)
 	}
 
-	for _, name := range []string{"catalog_dir", "work_dir", "upstream_repo", "upstream_ref", "upstream_timeout_seconds"} {
+	for _, name := range allSettings {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -192,5 +214,52 @@ func TestNewTOMLLoaderRequiresAPath(t *testing.T) {
 		if _, err := config.NewTOMLLoader(path); !errors.Is(err, config.ErrMissingSetting) {
 			t.Errorf("NewTOMLLoader(%q) error = %v, want ErrMissingSetting", path, err)
 		}
+	}
+}
+
+func TestLoadAcceptsAnExplicitlyEmptyOriginList(t *testing.T) {
+	t.Parallel()
+
+	got, err := load(t, strings.Replace(complete, `cors_allowed_origins = ["https://app.example.test"]`, "cors_allowed_origins = []", 1))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got.CORSAllowedOrigins == nil || len(got.CORSAllowedOrigins) != 0 {
+		t.Fatalf("CORSAllowedOrigins = %#v, want an empty, non-nil list", got.CORSAllowedOrigins)
+	}
+}
+
+func TestLoadRejectsUnusableServerSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct{ from, to, want string }{
+		"negative write timeout":  {"write_timeout_seconds = 60", "write_timeout_seconds = -1", "write_timeout_seconds"},
+		"negative reload":         {"reload_interval_seconds = 60", "reload_interval_seconds = -1", "reload_interval_seconds"},
+		"listen without a port":   {`listen_address = ":8080"`, `listen_address = "localhost"`, "listen_address"},
+		"listen port not numeric": {`listen_address = ":http"`, `listen_address = ":http"`, "listen_address"},
+		"listen port too large":   {`listen_address = ":8080"`, `listen_address = ":70000"`, "listen_address"},
+		"wildcard origin":         {`["https://app.example.test"]`, `["*"]`, "cors_allowed_origins"},
+		"origin with a path":      {`["https://app.example.test"]`, `["https://app.example.test/x"]`, "cors_allowed_origins"},
+		"origin without scheme":   {`["https://app.example.test"]`, `["app.example.test"]`, "cors_allowed_origins"},
+		"origin with a wildcard":  {`["https://app.example.test"]`, `["https://*.example.test"]`, "cors_allowed_origins"},
+		"origin with credentials": {`["https://app.example.test"]`, `["https://user@app.example.test"]`, "cors_allowed_origins"},
+		"ftp origin":              {`["https://app.example.test"]`, `["ftp://app.example.test"]`, "cors_allowed_origins"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			content := strings.Replace(complete, tt.from, tt.to, 1)
+			if name == "listen port not numeric" {
+				content = strings.Replace(complete, `listen_address = ":8080"`, `listen_address = ":http"`, 1)
+			}
+
+			_, err := load(t, content)
+			if !errors.Is(err, config.ErrInvalidConfig) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want ErrInvalidConfig naming %s", err, tt.want)
+			}
+		})
 	}
 }

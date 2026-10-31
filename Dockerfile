@@ -15,9 +15,14 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
     go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/screeny ./cmd
 
+# An empty data directory the nonroot user owns, so a volume mounted there is
+# writable by the sync command.
+RUN mkdir -p /out/data && chown 65532:65532 /out/data
+
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/screeny /screeny
+COPY --from=build --chown=65532:65532 /out/data /data
 
 USER nonroot:nonroot
 ENTRYPOINT ["/screeny"]

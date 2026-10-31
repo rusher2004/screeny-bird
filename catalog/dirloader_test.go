@@ -276,3 +276,169 @@ func TestDirLoaderRebuildIndexRefusesAnInvalidTree(t *testing.T) {
 		})
 	}
 }
+
+func TestDirLoaderReadAssetReturnsAFilesBytes(t *testing.T) {
+	t.Parallel()
+
+	dir := writeTree(t, build(t, []speciesFixture{wren}, nil))
+
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	got, err := loader.ReadAsset("species/1001-carolina-wren/display.png")
+	if err != nil || string(got) != string(displayPNG) {
+		t.Fatalf("ReadAsset() = %d bytes, %v; want the display image (%d bytes)", len(got), err, len(displayPNG))
+	}
+}
+
+func TestDirLoaderReadAssetRefusesUnsafeNames(t *testing.T) {
+	t.Parallel()
+
+	dir := writeTree(t, build(t, []speciesFixture{wren}, nil))
+
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	for _, name := range []string{"", ".", "..", "../x.png", "/etc/passwd", "species//x.png", "species/../index.json", `species\x.png`, "species/./x.png"} {
+		if _, err := loader.ReadAsset(name); !errors.Is(err, catalog.ErrInvalidAssetName) {
+			t.Errorf("ReadAsset(%q) error = %v, want ErrInvalidAssetName", name, err)
+		}
+	}
+}
+
+func TestDirLoaderReadAssetRefusesNonRegularFilesAndMissingOnes(t *testing.T) {
+	t.Parallel()
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.png"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("writing outside file: %v", err)
+	}
+
+	tree := build(t, []speciesFixture{wren}, nil)
+	tree["link-out.png"] = &fstest.MapFile{Data: []byte(filepath.Join(outside, "secret.png")), Mode: fs.ModeSymlink}
+	tree["link-in.png"] = &fstest.MapFile{Data: []byte("species/1001-carolina-wren/display.png"), Mode: fs.ModeSymlink}
+
+	loader, err := catalog.NewDirLoader(writeTree(t, tree))
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	for _, name := range []string{"link-out.png", "link-in.png", "species", "species/1001-carolina-wren"} {
+		if _, err := loader.ReadAsset(name); !errors.Is(err, catalog.ErrNotRegularFile) {
+			t.Errorf("ReadAsset(%q) error = %v, want ErrNotRegularFile", name, err)
+		}
+	}
+
+	if _, err := loader.ReadAsset("species/1001-carolina-wren/absent.png"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ReadAsset() of a missing file error = %v, want fs.ErrNotExist", err)
+	}
+}
+
+func TestDirLoaderReadAssetBoundsTheFileSize(t *testing.T) {
+	t.Parallel()
+
+	// The documented per-file limit is 32 MiB.
+	const limit = 32 << 20
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "big.png"), make([]byte, limit+1), 0o644); err != nil {
+		t.Fatalf("writing big file: %v", err)
+	}
+
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	if _, err := loader.ReadAsset("big.png"); err == nil {
+		t.Fatal("ReadAsset() of an oversized file error = nil, want failure")
+	}
+}
+
+func TestDirLoaderIndexVersionChangesWhenTheIndexDoes(t *testing.T) {
+	t.Parallel()
+
+	tree := build(t, []speciesFixture{wren, finch}, nil)
+	dir := writeTree(t, tree)
+
+	loader, err := catalog.NewDirLoader(dir)
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	first, err := loader.IndexVersion()
+	if err != nil {
+		t.Fatalf("IndexVersion() error = %v", err)
+	}
+
+	again, err := loader.IndexVersion()
+	if err != nil || again != first {
+		t.Fatalf("IndexVersion() of an unchanged index = %q, %v; want %q", again, err, first)
+	}
+
+	// Removing a species and rebuilding changes the index file.
+	if err := os.RemoveAll(filepath.Join(dir, "species", "1002-house-finch")); err != nil {
+		t.Fatalf("removing species: %v", err)
+	}
+
+	if _, err := loader.RebuildIndex(); err != nil {
+		t.Fatalf("RebuildIndex() error = %v", err)
+	}
+
+	changed, err := loader.IndexVersion()
+	if err != nil || changed == first {
+		t.Fatalf("IndexVersion() after a rebuild = %q, %v; want something other than %q", changed, err, first)
+	}
+}
+
+func TestDirLoaderIndexVersionReportsAMissingIndex(t *testing.T) {
+	t.Parallel()
+
+	loader, err := catalog.NewDirLoader(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	if _, err := loader.IndexVersion(); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("IndexVersion() error = %v, want fs.ErrNotExist", err)
+	}
+}
+
+func TestCatalogGeneratedAtIsTheLatestApproval(t *testing.T) {
+	t.Parallel()
+
+	loader, err := catalog.NewDirLoader(writeTree(t, build(t, []speciesFixture{wren, finch, bunting}, nil)))
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	got, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if at, ok := got.GeneratedAt(); !ok || at != finch.ApprovedAt {
+		t.Fatalf("GeneratedAt() = %q, %t; want %q, true", at, ok, finch.ApprovedAt)
+	}
+
+	empty := build(t, nil, nil)
+	empty["species"] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+
+	emptyLoader, err := catalog.NewDirLoader(writeTree(t, empty))
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	loaded, err := emptyLoader.Load()
+	if err != nil {
+		t.Fatalf("Load() of an empty catalog error = %v", err)
+	}
+
+	if at, ok := loaded.GeneratedAt(); ok || at != "" {
+		t.Fatalf("GeneratedAt() of an empty catalog = %q, %t; want empty, false", at, ok)
+	}
+}
