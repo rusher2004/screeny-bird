@@ -1,6 +1,6 @@
 # Screeny Bird
 
-Inspired by [Inky Bird Frame]. The server and tooling behind a macOS and tvOS screensaver that shows field-journal plates of birds.
+Inspired by [Inky Bird Frame]. The server and tooling behind a macOS screensaver that shows field-journal plates of birds.
 
 > **Status: early scaffold.** Catalog validation works. Syncing and serving are next.
 
