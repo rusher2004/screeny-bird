@@ -1,6 +1,6 @@
 # Screeny Bird
 
-Go server and tooling behind a macOS and tvOS bird-plate screensaver. It validates, syncs and serves an approved catalog of species plates. The screensaver apps (Swift) are separate and consume the HTTP API this repo defines.
+Go server and tooling behind a macOS bird-plate screensaver. It validates, syncs and serves an approved catalog of species plates. The screensaver apps (Swift) are separate and consume the HTTP API this repo defines.
 
 Attribution: this project builds on [Inky Bird Frame](https://github.com/veteranbv/inky-bird-frame). Keep `THIRD_PARTY_NOTICES.md` and the README credit current. Do not copy upstream code or art into this repository without updating the notices.
 
