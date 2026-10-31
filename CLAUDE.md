@@ -10,13 +10,13 @@ These are review-blocking. They come from the owner's Go standards and, where no
 
 ### Configuration (overrides the standards brief)
 
-- **No defaults and no fallbacks, anywhere.** Every setting and every dependency is supplied explicitly by the caller; a constructor never replaces a missing one with a real implementation or a build variable. Every setting is supplied explicitly by the caller. A missing or empty value is an error naming the setting, returned before any work starts, and every missing setting or dependency is reported together with `errors.Join`, not just the first. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
-- **`commands` gets the config it needs.** A command that needs settings declares the flag itself (today `--config <path>` on `catalog validate`) and reads it with `cmd.String`, as the urfave/cli flag examples do. `commands` declares the loader interfaces it needs, `ConfigLoader` and `CatalogLoader`, each with a plain `Load()`: what locates the data (a file path, a directory) is held by the implementing struct, never part of the interface. Because the path and the catalog directory are only known once a command is running, `Options` carries factories (`NewConfigLoader`, `NewCatalogLoader`) and every field of `Options` is required. `main` wires them to `config.NewTOMLLoader` and `catalog.NewDirLoader`, which return concrete structs and validate their argument. `config.TOMLLoader` decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` with a constructor and a `Load()` method. Nothing substitutes a default for a missing dependency.
-- **`cmd/main.go` reads no config.** It wires the real loader constructors into `commands.New`, runs it, prints the returned error once and maps the exit code.
-- **Commands that need no settings, like `version`, work with no config source.**
+- **No defaults and no fallbacks, anywhere.** Every setting and every dependency is supplied explicitly by the caller; a constructor never replaces a missing one with a real implementation or a build variable. A missing or empty value is an error naming the setting, returned before any work starts, and every missing setting or dependency is reported together with `errors.Join`, not just the first. Flags declare no `Value`. The Dockerfile and Compose set no defaults.
+- **`cmd/main.go` constructs every dependency.** It declares the `configLoader` interface it needs, builds `config.NewTOMLLoader` for the settings file, loads the settings, builds `catalog.NewDirLoader` from them, and passes the ready loaders to `commands.New`. While these are the only implementations, `main` assumes the settings file is at `/etc/screeny/config.toml`; when an alternative loader arrives (for example one reading the environment), `main` grows the flags it needs to choose between them. Because `main` loads config before building commands, every invocation, including `version`, needs the file.
+- **`commands` receives ready dependencies and knows nothing about config.** `commands.Options` is `Output` and `Catalogs`, both required. It declares `CatalogLoader`, a plain `Load()`: what locates the data, a directory, is held by the implementing struct and never appears in the interface.
+- **Loaders are concrete structs built by constructors that validate their argument:** `config.NewTOMLLoader(path)` and `catalog.NewDirLoader(dir)`. `config.TOMLLoader` decodes strictly: unknown keys, wrong types and missing or empty settings are errors. Another source, such as AWS Secrets Manager, is another type in `config` with a constructor and a `Load()` method.
 - **The version is discovered by `commands`** from the variable the build injects, read directly by the `version` command, not passed in through `Options`. The build injects it with `-ldflags "-X github.com/rusher2004/screeny-bird/commands.version=<VERSION>"` (this replaces the brief's `main.version`). A binary built without it fails the `version` command with `ErrNoVersion`; there is no fallback.
 - **No ambient state outside `cmd/`.** No other package calls `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv`, `os.UserHomeDir`, `os.UserConfigDir` or `os.UserCacheDir`. Nothing derives an implicit directory. Tests inject values and do not use the real environment.
-- Containers receive the config file the same way in development and production, as a mounted file.
+- Containers receive the config file the same way in development and production, as a mounted file at `/etc/screeny/config.toml`.
 - Constants are for protocol invariants (for example `schema_version` 1). Anything an operator could tune is configuration.
 
 ### Errors
@@ -65,8 +65,8 @@ When a change affects commands, flags, exit codes or config keys, update `README
 
 | Path | Role |
 | --- | --- |
-| `cmd/` | `main`. Runs `commands`, prints the returned error once and maps the exit code. |
-| `commands/` | urfave/cli v3 command tree and composition root. `Run` returns every error. Declares the flags and settings each command needs, loads them through small interfaces, and discovers the build version. |
+| `cmd/` | `main`. Loads the settings file, constructs the loaders from it, runs `commands`, prints the returned error once and maps the exit code. |
+| `commands/` | urfave/cli v3 command tree. `Run` returns every error. Declares the `CatalogLoader` it needs and discovers the build version. |
 | `tools/repoaudit/` | AST audit for the mechanical rules above: type-only files, ambient access outside `cmd/`, flag defaults. |
 | `config/` | `Config` and its loaders. `NewTOMLLoader(path)` returns a `TOMLLoader` whose `Load()` reads the settings strictly from that TOML file: every setting required, unknown keys rejected, no defaults. |
 | `catalog/` | `Load` validates a whole catalog tree (an `fs.FS`) and returns species and the canonical index, or every problem found. Sentinel errors name the rule broken. `NewDirLoader(dir)` returns a `DirLoader` whose `Load()` loads the catalog in that directory. Per-file limit 32 MiB. |
@@ -97,7 +97,7 @@ Build and smoke-test the image. The version is a required build argument:
 
 ```bash
 docker build --build-arg VERSION="$(cat VERSION)" -t screeny:dev .
-docker run --rm screeny:dev version
+docker run --rm -v "$PWD/config.example.toml:/etc/screeny/config.toml:ro" screeny:dev version
 ```
 
 The committed `.claude/settings.json` hooks run `gofmt -w` on edited Go files and `go fmt ./... && go fix ./...` when a turn ends.
