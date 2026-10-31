@@ -13,7 +13,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
-    go build -trimpath -ldflags "-X github.com/rusher2004/screeny-bird/commands.version=${VERSION}" -o /out/screeny ./cmd
+    go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/screeny ./cmd
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

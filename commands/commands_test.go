@@ -39,7 +39,7 @@ func run(t *testing.T, catalogs catalogLoader, args ...string) (output string, e
 
 	var buf bytes.Buffer
 
-	cmd, err := commands.New(commands.Options{Writer: &buf, Catalogs: catalogs})
+	cmd, err := commands.New(commands.Options{Writer: &buf, Catalogs: catalogs, Version: "1.2.3"})
 	if err != nil {
 		return "", err
 	}
@@ -54,11 +54,12 @@ func TestNewRequiresEveryDependency(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}}
+	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}, Version: "1.2.3"}
 
 	tests := map[string]func(commands.Options) commands.Options{
 		"writer":   func(o commands.Options) commands.Options { o.Writer = nil; return o },
 		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
+		"version":  func(o commands.Options) commands.Options { o.Version = "  "; return o },
 	}
 
 	for name, drop := range tests {
@@ -89,27 +90,25 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"writer", "catalogs"} {
+	for _, name := range []string{"writer", "catalogs", "version"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
 	}
 }
 
-// Test binaries are built without the version ldflag, so this is the
-// unversioned build.
-func TestVersionFailsWhenTheBuildSetNone(t *testing.T) {
+func TestVersionPrintsTheInjectedVersion(t *testing.T) {
 	t.Parallel()
 
 	catalogs := &fakeCatalogs{}
 
 	output, err := run(t, catalogs, "version")
-	if !errors.Is(err, commands.ErrNoVersion) {
-		t.Fatalf("Run(version) error = %v, want ErrNoVersion", err)
+	if err != nil {
+		t.Fatalf("Run(version) error = %v", err)
 	}
 
-	if output != "" {
-		t.Fatalf("Run(version) printed %q, want nothing", output)
+	if got, want := output, "1.2.3\n"; got != want {
+		t.Fatalf("Run(version) output = %q, want %q", got, want)
 	}
 
 	if catalogs.calls != 0 {

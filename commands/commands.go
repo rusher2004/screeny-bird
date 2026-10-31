@@ -6,24 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/rusher2004/screeny-bird/catalog"
 )
 
-// version is injected at build time with
-// -ldflags "-X github.com/rusher2004/screeny-bird/commands.version=<version>".
-var version string
-
 // ExitUsage is the exit code for a malformed command line.
 const ExitUsage = 2
 
 // ErrMissingOption reports that a required Options field was not provided.
 var ErrMissingOption = errors.New("missing required option")
-
-// ErrNoVersion reports a binary built without a version.
-var ErrNoVersion = errors.New("version was not set at build time")
 
 // ExitError carries a process exit code that differs from the default of 1.
 // It has no Unwrap: its message stands on its own.
@@ -45,6 +39,8 @@ type catalogLoader interface {
 type Options struct {
 	Writer   io.Writer
 	Catalogs catalogLoader
+	// Version is what the version command prints.
+	Version string
 }
 
 // New builds the command tree from explicit dependencies. Run on the result
@@ -59,6 +55,10 @@ func New(opts Options) (*cli.Command, error) {
 
 	if opts.Catalogs == nil {
 		missing = append(missing, fmt.Errorf("catalogs: %w", ErrMissingOption))
+	}
+
+	if strings.TrimSpace(opts.Version) == "" {
+		missing = append(missing, fmt.Errorf("version: %w", ErrMissingOption))
 	}
 
 	if err := errors.Join(missing...); err != nil {
@@ -117,11 +117,7 @@ func New(opts Options) (*cli.Command, error) {
 				Name:  "version",
 				Usage: "Print the application version",
 				Action: func(context.Context, *cli.Command) error {
-					if version == "" {
-						return fmt.Errorf("reading the version: %w", ErrNoVersion)
-					}
-
-					if _, err := fmt.Fprintln(opts.Writer, version); err != nil {
+					if _, err := fmt.Fprintln(opts.Writer, opts.Version); err != nil {
 						return fmt.Errorf("writing version: %w", err)
 					}
 

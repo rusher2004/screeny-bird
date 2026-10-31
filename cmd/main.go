@@ -13,6 +13,9 @@ import (
 	"github.com/rusher2004/screeny-bird/config"
 )
 
+// version is injected at build time with -ldflags "-X main.version=<version>".
+var version string
+
 // configPath is where main expects the settings file. These are the only
 // implementations that exist, so main assumes this location; reading it from a
 // flag arrives with the first alternative config loader.
@@ -24,24 +27,24 @@ type configLoader interface {
 }
 
 func main() {
-	err := run(context.Background(), os.Args, os.Stdout)
+	err := run(context.Background(), version, os.Args, os.Stdout)
 	os.Exit(report(os.Stderr, err))
 }
 
 // run loads the settings file main assumes and executes the command line,
 // writing command output to w.
-func run(ctx context.Context, args []string, w io.Writer) error {
+func run(ctx context.Context, version string, args []string, w io.Writer) error {
 	loader, err := config.NewTOMLLoader(configPath)
 	if err != nil {
 		return fmt.Errorf("creating config loader: %w", err)
 	}
 
-	return execute(ctx, loader, args, w)
+	return execute(ctx, version, loader, args, w)
 }
 
 // execute loads settings from loader, builds every dependency from them and
 // runs the command line, writing command output to w.
-func execute(ctx context.Context, loader configLoader, args []string, w io.Writer) error {
+func execute(ctx context.Context, version string, loader configLoader, args []string, w io.Writer) error {
 	cfg, err := loader.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -52,7 +55,7 @@ func execute(ctx context.Context, loader configLoader, args []string, w io.Write
 		return fmt.Errorf("creating catalog loader: %w", err)
 	}
 
-	cmd, err := commands.New(commands.Options{Writer: w, Catalogs: catalogs})
+	cmd, err := commands.New(commands.Options{Writer: w, Catalogs: catalogs, Version: version})
 	if err != nil {
 		return err
 	}

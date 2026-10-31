@@ -50,6 +50,7 @@ func TestExecuteAndReport(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		version    string
 		loader     *fakeLoader
 		args       []string
 		wantCode   int
@@ -58,12 +59,14 @@ func TestExecuteAndReport(t *testing.T) {
 	}{
 		{
 			name:       "settings reach the catalog command",
+			version:    "1.2.3",
 			loader:     &fakeLoader{cfg: loaded},
 			args:       []string{"screeny", "catalog", "validate"},
 			wantOutput: "validated 0 species\n",
 		},
 		{
 			name:       "a config failure stops before the command runs",
+			version:    "1.2.3",
 			loader:     &fakeLoader{err: errors.New("boom")},
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
@@ -71,6 +74,7 @@ func TestExecuteAndReport(t *testing.T) {
 		},
 		{
 			name:       "a blank catalog directory fails while building the loader",
+			version:    "1.2.3",
 			loader:     &fakeLoader{cfg: config.Config{CatalogDir: " "}},
 			args:       []string{"screeny", "catalog", "validate"},
 			wantCode:   1,
@@ -78,18 +82,25 @@ func TestExecuteAndReport(t *testing.T) {
 		},
 		{
 			name:       "usage error exits two",
+			version:    "1.2.3",
 			loader:     &fakeLoader{cfg: loaded},
 			args:       []string{"screeny", "--no-such-flag"},
 			wantCode:   2,
 			wantReport: "screeny: usage: flag provided but not defined: -no-such-flag\n",
 		},
 		{
-			// The test binary is built without the version ldflag.
-			name:       "an unversioned build is a runtime error",
+			name:       "the version command prints the injected version",
+			version:    "1.2.3",
+			loader:     &fakeLoader{cfg: loaded},
+			args:       []string{"screeny", "version"},
+			wantOutput: "1.2.3\n",
+		},
+		{
+			name:       "a build without a version fails fast",
 			loader:     &fakeLoader{cfg: loaded},
 			args:       []string{"screeny", "version"},
 			wantCode:   1,
-			wantReport: "screeny: reading the version: version was not set at build time\n",
+			wantReport: "screeny: building command tree: version: missing required option\n",
 		},
 	}
 
@@ -99,7 +110,7 @@ func TestExecuteAndReport(t *testing.T) {
 
 			var output, errText bytes.Buffer
 
-			err := execute(context.Background(), tt.loader, tt.args, &output)
+			err := execute(context.Background(), tt.version, tt.loader, tt.args, &output)
 			if code := report(&errText, err); code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
 			}
@@ -134,7 +145,7 @@ func TestExecuteLoadsTheRealTOMLFile(t *testing.T) {
 
 	var output bytes.Buffer
 
-	if err := execute(context.Background(), loader, []string{"screeny", "catalog", "validate"}, &output); err != nil || output.String() != "validated 0 species\n" {
+	if err := execute(context.Background(), "1.2.3", loader, []string{"screeny", "catalog", "validate"}, &output); err != nil || output.String() != "validated 0 species\n" {
 		t.Fatalf("execute() = %q, %v; want %q and no error", output.String(), err, "validated 0 species\n")
 	}
 }
