@@ -106,8 +106,15 @@ func (c Config) validate() error {
 		}
 	}
 
-	if strings.TrimSpace(c.CatalogDir) != "" && strings.TrimSpace(c.DerivedDir) != "" && isWithin(c.CatalogDir, c.DerivedDir) {
-		errs = append(errs, fmt.Errorf("derived_dir: %q must be outside catalog_dir %q: %w", c.DerivedDir, c.CatalogDir, ErrInvalidConfig))
+	if strings.TrimSpace(c.CatalogDir) != "" && strings.TrimSpace(c.DerivedDir) != "" {
+		inside, err := isWithin(c.CatalogDir, c.DerivedDir)
+
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("derived_dir: %q and catalog_dir %q must both be absolute or both relative: %w: %w", c.DerivedDir, c.CatalogDir, ErrInvalidConfig, err))
+		case inside:
+			errs = append(errs, fmt.Errorf("derived_dir: %q must be outside catalog_dir %q: %w", c.DerivedDir, c.CatalogDir, ErrInvalidConfig))
+		}
 	}
 
 	if strings.TrimSpace(c.ListenAddress) != "" {
@@ -130,11 +137,15 @@ func (c Config) validate() error {
 }
 
 // isWithin reports whether path is parent or inside it, comparing cleaned
-// paths without touching the filesystem.
-func isWithin(parent, path string) bool {
+// paths without touching the filesystem, so it cannot see through symlinks. It
+// fails when the two cannot be compared, such as one absolute and one relative.
+func isWithin(parent, path string) (bool, error) {
 	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(path))
+	if err != nil {
+		return false, fmt.Errorf("comparing %q with %q: %w", path, parent, err)
+	}
 
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
 func checkListenAddress(address string) error {

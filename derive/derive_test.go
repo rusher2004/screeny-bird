@@ -150,6 +150,12 @@ func TestNewDeriverReportsEveryProblemTogether(t *testing.T) {
 		}
 	}
 
+	for _, size := range [][2]int{{16385, 100}, {100, 16385}} {
+		if _, err := derive.NewDeriver(newStore(t), &recordingProgress{}, "/out", size[0], size[1]); !errors.Is(err, derive.ErrInvalidDeriver) {
+			t.Errorf("NewDeriver() at %dx%d error = %v, want ErrInvalidDeriver", size[0], size[1], err)
+		}
+	}
+
 	if _, err := derive.NewDeriver(newStore(t), &recordingProgress{}, "/out", 1, 1); err != nil {
 		t.Fatalf("NewDeriver() with every argument error = %v", err)
 	}
@@ -206,19 +212,9 @@ func TestDeriveWritesEverySpeciesAtTheConfiguredSize(t *testing.T) {
 	}
 }
 
-// newPlateStore builds a one-species catalog whose portrait image has a light
-// 40 pixel border around a dark interior, so a test can see where the plate
-// lands and what color pads it.
-func newPlateStore(t *testing.T) catalog.DirLoader {
-	t.Helper()
-
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "species"), 0o755); err != nil {
-		t.Fatalf("creating species directory: %v", err)
-	}
-
-	addSpecies(t, dir, fixtureSpecies[0])
-
+// lightBorderPlate is a 1200x1600 plate with a light 40 pixel border around a
+// dark interior, so a test can see where the plate lands and what color pads it.
+func lightBorderPlate() image.Image {
 	plate := image.NewGray(image.Rect(0, 0, 1200, 1600))
 
 	for y := range 1600 {
@@ -230,6 +226,20 @@ func newPlateStore(t *testing.T) catalog.DirLoader {
 			}
 		}
 	}
+
+	return plate
+}
+
+// newPlateStore builds a one-species catalog whose portrait image is plate.
+func newPlateStore(t *testing.T, plate image.Image) catalog.DirLoader {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "species"), 0o755); err != nil {
+		t.Fatalf("creating species directory: %v", err)
+	}
+
+	addSpecies(t, dir, fixtureSpecies[0])
 
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, plate); err != nil {
@@ -282,7 +292,7 @@ func TestDeriveLetterboxesTheWholePlateWithoutCropping(t *testing.T) {
 	t.Parallel()
 
 	out := t.TempDir()
-	if _, err := newDeriver(t, newPlateStore(t), &recordingProgress{}, out).Derive(context.Background()); err != nil {
+	if _, err := newDeriver(t, newPlateStore(t, lightBorderPlate()), &recordingProgress{}, out).Derive(context.Background()); err != nil {
 		t.Fatalf("Derive() error = %v", err)
 	}
 
@@ -305,6 +315,58 @@ func TestDeriveLetterboxesTheWholePlateWithoutCropping(t *testing.T) {
 	// The plate's own border band survives at the top edge of the plate area.
 	if got := luma(img, 160, 2); got < 150 {
 		t.Errorf("top edge of the plate = %d, want the light border: the plate was cropped", got)
+	}
+}
+
+func TestDerivePadsWithTheOpaqueBorderPixelsOnly(t *testing.T) {
+	t.Parallel()
+
+	// The left half of the outer ring is transparent black, the rest opaque
+	// 200: padding must be 200, not pulled toward black.
+	plate := image.NewNRGBA(image.Rect(0, 0, 1200, 1600))
+
+	for y := range 1600 {
+		for x := range 1200 {
+			switch {
+			case x < 600 && (x < 40 || y < 40 || y >= 1560):
+				plate.SetNRGBA(x, y, color.NRGBA{})
+			case x < 40 || x >= 1160 || y < 40 || y >= 1560:
+				plate.SetNRGBA(x, y, color.NRGBA{R: 200, G: 200, B: 200, A: 255})
+			default:
+				plate.SetNRGBA(x, y, color.NRGBA{R: 50, G: 50, B: 50, A: 255})
+			}
+		}
+	}
+
+	out := t.TempDir()
+	if _, err := newDeriver(t, newPlateStore(t, plate), &recordingProgress{}, out).Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() error = %v", err)
+	}
+
+	img := decode(t, filepath.Join(out, "species", fixtureSpecies[0], fmt.Sprintf("%dx%d.png", width, height)))
+	if got := luma(img, 0, 90); got != 200 {
+		t.Errorf("padding = %d, want 200 from the opaque border pixels", got)
+	}
+}
+
+func TestDeriveRefusesAPlateWithAFullyTransparentBorder(t *testing.T) {
+	t.Parallel()
+
+	plate := image.NewNRGBA(image.Rect(0, 0, 1200, 1600))
+
+	for y := range 1600 {
+		for x := range 1200 {
+			if x >= 40 && x < 1160 && y >= 40 && y < 1560 {
+				plate.SetNRGBA(x, y, color.NRGBA{R: 50, G: 50, B: 50, A: 255})
+			}
+		}
+	}
+
+	out := t.TempDir()
+
+	_, err := newDeriver(t, newPlateStore(t, plate), &recordingProgress{}, out).Derive(context.Background())
+	if !errors.Is(err, derive.ErrTransparentBorder) {
+		t.Fatalf("Derive() error = %v, want ErrTransparentBorder", err)
 	}
 }
 
@@ -383,6 +445,120 @@ func TestDeriveAddsOnlyTheNewSpecies(t *testing.T) {
 
 	if added, err := newDeriver(t, store, &recordingProgress{}, out).Derive(context.Background()); err != nil || added != 0 {
 		t.Fatalf("third Derive() = %d, %v; want nothing to add", added, err)
+	}
+}
+
+// cancelAfter cancels a context once n images are derived.
+type cancelAfter struct {
+	recordingProgress
+	n      int
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfter) Derived(done, missing int, species string) {
+	c.recordingProgress.Derived(done, missing, species)
+
+	if done == c.n {
+		c.cancel()
+	}
+}
+
+func TestDeriveRecordsEachImageSoAStoppedRunResumes(t *testing.T) {
+	t.Parallel()
+
+	store, out := newStore(t, fixtureSpecies...), t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopper := &cancelAfter{n: 1, cancel: cancel}
+
+	deriver, err := derive.NewDeriver(store, stopper, out, width, height)
+	if err != nil {
+		t.Fatalf("NewDeriver() error = %v", err)
+	}
+
+	if _, err := deriver.Derive(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first Derive() error = %v, want context.Canceled", err)
+	}
+
+	if idx, _ := readIndex(t, out); len(idx.Species) != 1 || idx.Species[0].Slug != "carolina-wren" {
+		t.Fatalf("index after the stop lists %+v, want only the finished image", idx.Species)
+	}
+
+	progress := &recordingProgress{}
+	if added, err := newDeriver(t, store, progress, out).Derive(context.Background()); err != nil || added != 2 {
+		t.Fatalf("second Derive() = %d, %v; want the remaining 2", added, err)
+	}
+
+	if want := []string{"planned 3 2", "derived 1/2 " + fixtureSpecies[1], "derived 2/2 " + fixtureSpecies[2]}; !slices.Equal(progress.events, want) {
+		t.Fatalf("progress = %q, want %q", progress.events, want)
+	}
+}
+
+func TestDeriveAdoptsAnIdenticalUnrecordedImageButNeverOverwritesADifferentOne(t *testing.T) {
+	t.Parallel()
+
+	store, out := newStore(t, fixtureSpecies[:2]...), t.TempDir()
+
+	if _, err := newDeriver(t, store, &recordingProgress{}, out).Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() error = %v", err)
+	}
+
+	size := fmt.Sprintf("%dx%d.png", width, height)
+	first := filepath.Join(out, "species", fixtureSpecies[0], size)
+	second := filepath.Join(out, "species", fixtureSpecies[1], size)
+
+	before, err := os.Stat(first)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	// Losing the index leaves both images unrecorded.
+	if err := os.Remove(filepath.Join(out, "index.json")); err != nil {
+		t.Fatalf("removing index: %v", err)
+	}
+
+	if _, err := newDeriver(t, store, &recordingProgress{}, out).Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() with identical leftovers error = %v", err)
+	}
+
+	after, err := os.Stat(first)
+	if err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("an identical leftover was rewritten instead of adopted (stat error %v)", err)
+	}
+
+	if idx, _ := readIndex(t, out); len(idx.Species) != 2 {
+		t.Errorf("index lists %d species after adopting, want 2", len(idx.Species))
+	}
+
+	if err := os.Remove(filepath.Join(out, "index.json")); err != nil {
+		t.Fatalf("removing index: %v", err)
+	}
+
+	if err := os.WriteFile(second, []byte("hand edited"), 0o644); err != nil {
+		t.Fatalf("editing: %v", err)
+	}
+
+	if _, err := newDeriver(t, store, &recordingProgress{}, out).Derive(context.Background()); !errors.Is(err, derive.ErrDerivedChanged) {
+		t.Fatalf("Derive() over a changed leftover error = %v, want ErrDerivedChanged", err)
+	}
+
+	if got, err := os.ReadFile(second); err != nil || string(got) != "hand edited" {
+		t.Errorf("the changed leftover was overwritten: %q, %v", got, err)
+	}
+}
+
+func TestDeriveFailsOnARecordedSpeciesTheCatalogLacks(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+
+	if _, err := newDeriver(t, newStore(t, fixtureSpecies...), &recordingProgress{}, out).Derive(context.Background()); err != nil {
+		t.Fatalf("Derive() error = %v", err)
+	}
+
+	_, err := newDeriver(t, newStore(t, fixtureSpecies[:2]...), &recordingProgress{}, out).Derive(context.Background())
+	if !errors.Is(err, derive.ErrInvalidIndex) || !strings.Contains(err.Error(), "1003") {
+		t.Fatalf("Derive() error = %v, want ErrInvalidIndex naming taxon 1003", err)
 	}
 }
 

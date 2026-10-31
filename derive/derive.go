@@ -1,10 +1,9 @@
 // Package derive builds the screensaver-sized images from the approved
-// catalog. Each upright portrait plate (the display variant is rotated for a
-// landscape e-ink frame, so its text runs sideways) is scaled whole to fit the
-// configured size and padded
+// catalog. Each plate is scaled whole to fit the configured size and padded
 // with a solid color taken from its own border, so nothing is cropped. The
-// output is deterministic and lives outside the catalog, which is never
-// changed.
+// source is the upright portrait plate: the display variant is rotated for a
+// landscape e-ink frame, so its text runs sideways. The output is
+// deterministic and lives outside the catalog, which is never changed.
 package derive
 
 import (
@@ -36,6 +35,9 @@ const (
 	indexFile     = "index.json"
 	lockFile      = "derive.lock"
 	schemaVersion = 1
+	// maxDimension bounds the configured width and height so a typo cannot ask
+	// for an image too large to allocate.
+	maxDimension = 16384
 )
 
 var (
@@ -96,8 +98,8 @@ func NewDeriver(store store, progress progress, outDir string, width, height int
 		problems = append(problems, errors.New("output directory is required"))
 	}
 
-	if width < 1 || height < 1 {
-		problems = append(problems, fmt.Errorf("size must be positive, got %dx%d", width, height))
+	if width < 1 || height < 1 || width > maxDimension || height > maxDimension {
+		problems = append(problems, fmt.Errorf("size must be from 1 to %d pixels each way, got %dx%d", maxDimension, width, height))
 	}
 
 	if err := errors.Join(problems...); err != nil {
@@ -122,10 +124,12 @@ type index struct {
 }
 
 // Derive writes a derived image for every species in the catalog that lacks
-// one and rewrites the derived index. It returns how many it wrote. A species
-// that already has an image is only checked against its recorded checksum,
-// never rewritten. A failed run leaves its finished images, and the next run
-// makes the rest.
+// one and keeps the derived index current, rewriting it after every image. It
+// returns how many species it recorded. A recorded image is only checked
+// against its checksum, never rewritten, and an unrecorded file already at an
+// image's path is adopted only if it is byte-identical to what would be
+// written, otherwise the run fails. A failed run leaves its finished images
+// and index, and the next run makes the rest.
 func (d Deriver) Derive(ctx context.Context) (added int, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("starting derive: %w", err)
@@ -156,6 +160,23 @@ func (d Deriver) Derive(ctx context.Context) (added int, err error) {
 
 	recorded, err := d.readIndex()
 	if err != nil {
+		return 0, err
+	}
+
+	inCatalog := make(map[int]bool, len(species))
+	for _, sp := range species {
+		inCatalog[sp.TaxonID] = true
+	}
+
+	var orphans []error
+
+	for taxon, e := range recorded {
+		if !inCatalog[taxon] {
+			orphans = append(orphans, fmt.Errorf("taxon %d (%s) is recorded but not in the catalog: %w", taxon, e.Slug, ErrInvalidIndex))
+		}
+	}
+
+	if err := errors.Join(orphans...); err != nil {
 		return 0, err
 	}
 
@@ -200,13 +221,17 @@ func (d Deriver) Derive(ctx context.Context) (added int, err error) {
 
 		entries = append(entries, entry)
 
+		if err := d.writeIndex(entries); err != nil {
+			return 0, err
+		}
+
 		d.progress.Derived(i+1, len(missing), speciesDir(sp))
 	}
 
-	slices.SortFunc(entries, func(a, b indexEntry) int { return cmp.Compare(a.TaxonID, b.TaxonID) })
-
-	if err := d.writeIndex(entries); err != nil {
-		return 0, err
+	if len(missing) == 0 {
+		if err := d.writeIndex(entries); err != nil {
+			return 0, err
+		}
 	}
 
 	return len(missing), nil
@@ -300,20 +325,39 @@ func (d Deriver) deriveOne(sp catalog.Species) (indexEntry, error) {
 		return indexEntry{}, fmt.Errorf("decoding the portrait image of %s: %w", dir, err)
 	}
 
+	fitted, err := fit(src, d.width, d.height)
+	if err != nil {
+		return indexEntry{}, fmt.Errorf("fitting the portrait image of %s: %w", dir, err)
+	}
+
 	var out bytes.Buffer
-	if err := png.Encode(&out, fit(src, d.width, d.height)); err != nil {
+	if err := png.Encode(&out, fitted); err != nil {
 		return indexEntry{}, fmt.Errorf("encoding the derived image of %s: %w", dir, err)
 	}
 
 	rel := d.derivedPath(sp)
 	target := filepath.Join(d.outDir, filepath.FromSlash(rel))
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return indexEntry{}, fmt.Errorf("creating the derived directory of %s: %w", dir, err)
-	}
+	existing, err := os.ReadFile(target)
 
-	if err := fsutil.WriteFileAtomic(target, out.Bytes(), 0o644); err != nil {
-		return indexEntry{}, fmt.Errorf("writing the derived image of %s: %w", dir, err)
+	switch {
+	case err == nil:
+		// A leftover from a run that stopped before recording it. Output is
+		// deterministic, so an identical file is adopted; anything else was
+		// changed by someone and is never overwritten.
+		if !bytes.Equal(existing, out.Bytes()) {
+			return indexEntry{}, fmt.Errorf("%s exists but is not what derive would write: %w", rel, ErrDerivedChanged)
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return indexEntry{}, fmt.Errorf("creating the derived directory of %s: %w", dir, err)
+		}
+
+		if err := fsutil.WriteFileAtomic(target, out.Bytes(), 0o644); err != nil {
+			return indexEntry{}, fmt.Errorf("writing the derived image of %s: %w", dir, err)
+		}
+	default:
+		return indexEntry{}, fmt.Errorf("inspecting %s: %w", rel, err)
 	}
 
 	return indexEntry{Path: rel, SHA256: sha256Hex(out.Bytes()), Slug: sp.Slug, TaxonID: sp.TaxonID}, nil
@@ -322,7 +366,10 @@ func (d Deriver) deriveOne(sp catalog.Species) (indexEntry, error) {
 // writeIndex writes the derived index in canonical form: sorted keys, two
 // space indent and a trailing newline.
 func (d Deriver) writeIndex(entries []indexEntry) error {
-	raw, err := json.MarshalIndent(index{Height: d.height, SchemaVersion: schemaVersion, Species: entries, Width: d.width}, "", "  ")
+	sorted := slices.Clone(entries)
+	slices.SortFunc(sorted, func(a, b indexEntry) int { return cmp.Compare(a.TaxonID, b.TaxonID) })
+
+	raw, err := json.MarshalIndent(index{Height: d.height, SchemaVersion: schemaVersion, Species: sorted, Width: d.width}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding the derived index: %w", err)
 	}
@@ -334,9 +381,18 @@ func (d Deriver) writeIndex(entries []indexEntry) error {
 	return nil
 }
 
+// ErrTransparentBorder reports a plate whose outer ring is fully transparent,
+// so it has no border color to pad with.
+var ErrTransparentBorder = errors.New("plate border is fully transparent")
+
 // fit scales src whole to the largest size that fits width by height and
 // centers it on a canvas filled with the color of src's border.
-func fit(src image.Image, width, height int) *image.NRGBA {
+func fit(src image.Image, width, height int) (*image.NRGBA, error) {
+	pad, err := borderColor(src)
+	if err != nil {
+		return nil, err
+	}
+
 	bounds := src.Bounds()
 	sw, sh := bounds.Dx(), bounds.Dy()
 
@@ -348,23 +404,24 @@ func fit(src image.Image, width, height int) *image.NRGBA {
 	}
 
 	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(dst, dst.Bounds(), image.NewUniform(borderColor(src)), image.Point{}, draw.Src)
+	draw.Draw(dst, dst.Bounds(), image.NewUniform(pad), image.Point{}, draw.Src)
 
 	left, top := (width-w)/2, (height-h)/2
 	xdraw.CatmullRom.Scale(dst, image.Rect(left, top, left+w, top+h), src, bounds, xdraw.Over, nil)
 
-	return dst
+	return dst, nil
 }
 
-// borderColor is the mean color of the outermost ring of pixels of img.
-func borderColor(img image.Image) color.NRGBA {
+// borderColor is the mean color of the outermost ring of pixels of img,
+// weighted by opacity so transparent pixels do not darken it.
+func borderColor(img image.Image) (color.NRGBA, error) {
 	b := img.Bounds()
 
-	var r, g, bl, n int
+	var r, g, bl, a uint64
 
 	add := func(x, y int) {
-		c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-		r, g, bl, n = r+int(c.R), g+int(c.G), bl+int(c.B), n+1
+		pr, pg, pb, pa := img.At(x, y).RGBA() // premultiplied, 16 bits
+		r, g, bl, a = r+uint64(pr), g+uint64(pg), bl+uint64(pb), a+uint64(pa)
 	}
 
 	for x := b.Min.X; x < b.Max.X; x++ {
@@ -377,7 +434,13 @@ func borderColor(img image.Image) color.NRGBA {
 		add(b.Max.X-1, y)
 	}
 
-	return color.NRGBA{R: uint8((r + n/2) / n), G: uint8((g + n/2) / n), B: uint8((bl + n/2) / n), A: 255}
+	if a == 0 {
+		return color.NRGBA{}, ErrTransparentBorder
+	}
+
+	channel := func(sum uint64) uint8 { return uint8((sum*255 + a/2) / a) }
+
+	return color.NRGBA{R: channel(r), G: channel(g), B: channel(bl), A: 255}, nil
 }
 
 func sha256Hex(data []byte) string {
