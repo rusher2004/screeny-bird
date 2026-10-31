@@ -43,7 +43,7 @@ type CatalogLoader interface {
 
 // Options is everything the command tree depends on. Every field is required.
 type Options struct {
-	Output   io.Writer
+	Writer   io.Writer
 	Catalogs CatalogLoader
 }
 
@@ -53,8 +53,8 @@ type Options struct {
 func New(opts Options) (*cli.Command, error) {
 	var missing []error
 
-	if opts.Output == nil {
-		missing = append(missing, fmt.Errorf("output: %w", ErrMissingOption))
+	if opts.Writer == nil {
+		missing = append(missing, fmt.Errorf("writer: %w", ErrMissingOption))
 	}
 
 	if opts.Catalogs == nil {
@@ -68,7 +68,7 @@ func New(opts Options) (*cli.Command, error) {
 	return &cli.Command{
 		Name:   "screeny",
 		Usage:  "Validate, sync and serve the bird plate catalog",
-		Writer: opts.Output,
+		Writer: opts.Writer,
 		// The library must not print errors itself: main reports each one once.
 		ErrWriter: io.Discard,
 		// The caller owns printing and exit codes, so the library must neither

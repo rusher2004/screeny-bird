@@ -52,7 +52,7 @@ func execute(ctx context.Context, loader configLoader, args []string, w io.Write
 		return fmt.Errorf("creating catalog loader: %w", err)
 	}
 
-	cmd, err := commands.New(commands.Options{Output: w, Catalogs: catalogs})
+	cmd, err := commands.New(commands.Options{Writer: w, Catalogs: catalogs})
 	if err != nil {
 		return err
 	}

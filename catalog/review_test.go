@@ -173,7 +173,7 @@ func TestLoadEnforcesReviewGates(t *testing.T) {
 
 			fsys := build(t, []speciesFixture{wren}, func(_ string, f *speciesFiles) { tt.edit(f) })
 
-			_, err := catalog.Load(fsys)
+			_, err := loadFS(t, fsys)
 			if tt.accept {
 				if err != nil {
 					t.Fatalf("Load() error = %v, want the catalog to load", err)

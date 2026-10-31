@@ -62,7 +62,7 @@ func (l TOMLLoader) Load() (Config, error) {
 		return Config{}, fmt.Errorf("decoding config file %q: %w: %w", path, ErrInvalidConfig, err)
 	}
 
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("config file %q: %w", path, err)
 	}
 

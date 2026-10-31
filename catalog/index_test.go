@@ -141,7 +141,7 @@ func TestLoadRejectsIndexThatDoesNotMatchManifests(t *testing.T) {
 			tt.edit(index)
 			fsys["index.json"] = &fstest.MapFile{Data: mustJSON(t, index)}
 
-			if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrIndexMismatch) {
+			if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrIndexMismatch) {
 				t.Fatalf("Load() error = %v, want ErrIndexMismatch", err)
 			}
 		})
@@ -154,7 +154,7 @@ func TestLoadRejectsMalformedIndex(t *testing.T) {
 	fsys := build(t, []speciesFixture{wren}, nil)
 	fsys["index.json"] = &fstest.MapFile{Data: []byte("[")}
 
-	if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrIndexMismatch) {
+	if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrIndexMismatch) {
 		t.Fatalf("Load() error = %v, want ErrIndexMismatch", err)
 	}
 }

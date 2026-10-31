@@ -109,7 +109,7 @@ func TestLoadRejectsBadManifest(t *testing.T) {
 
 			fsys := build(t, []speciesFixture{wren}, func(_ string, f *speciesFiles) { tt.edit(f) })
 
-			if _, err := catalog.Load(fsys); !errors.Is(err, tt.want) {
+			if _, err := loadFS(t, fsys); !errors.Is(err, tt.want) {
 				t.Fatalf("Load() error = %v, want %v", err, tt.want)
 			}
 		})
@@ -122,7 +122,7 @@ func TestLoadRejectsMalformedManifestJSON(t *testing.T) {
 	fsys := build(t, []speciesFixture{wren}, nil)
 	fsys["species/1001-carolina-wren/manifest.json"] = &fstest.MapFile{Data: []byte("{not json")}
 
-	if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrInvalidManifest) {
+	if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrInvalidManifest) {
 		t.Fatalf("Load() error = %v, want ErrInvalidManifest", err)
 	}
 }

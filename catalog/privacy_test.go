@@ -74,7 +74,7 @@ func TestLoadRejectsPrivateContent(t *testing.T) {
 
 			fsys := build(t, []speciesFixture{wren}, func(_ string, f *speciesFiles) { tt.edit(f) })
 
-			if _, err := catalog.Load(fsys); !errors.Is(err, tt.want) {
+			if _, err := loadFS(t, fsys); !errors.Is(err, tt.want) {
 				t.Fatalf("Load() error = %v, want %v", err, tt.want)
 			}
 		})
@@ -89,7 +89,7 @@ func TestLoadRejectsPrivateContentInIndex(t *testing.T) {
 		"schema_version": 1, "generated_at": nil, "species": []any{}, "place_name": "Somewhere",
 	})}
 
-	if _, err := catalog.Load(fsys); !errors.Is(err, catalog.ErrPrivateField) {
+	if _, err := loadFS(t, fsys); !errors.Is(err, catalog.ErrPrivateField) {
 		t.Fatalf("Load() error = %v, want ErrPrivateField", err)
 	}
 }

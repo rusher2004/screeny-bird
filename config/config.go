@@ -22,9 +22,9 @@ type Config struct {
 	CatalogDir string `toml:"catalog_dir"`
 }
 
-// Validate reports every required setting that is missing or empty, joined
-// into one error. Every loader calls it, whatever the source.
-func (c Config) Validate() error {
+// validate reports every required setting that is missing or empty, joined
+// into one error. Every loader in this package calls it, whatever the source.
+func (c Config) validate() error {
 	var errs []error
 
 	if strings.TrimSpace(c.CatalogDir) == "" {

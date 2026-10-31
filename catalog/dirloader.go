@@ -24,8 +24,9 @@ func NewDirLoader(dir string) (DirLoader, error) {
 	return DirLoader{dir: dir}, nil
 }
 
-// Load validates the catalog in the loader's directory. See the package
-// function Load.
+// Load validates every part of the catalog in the loader's directory and
+// returns it. When anything is wrong it returns no catalog and an error joining
+// every problem found, each species problem wrapped in a *SpeciesError.
 func (l DirLoader) Load() (*Catalog, error) {
-	return Load(os.DirFS(l.dir))
+	return load(os.DirFS(l.dir))
 }

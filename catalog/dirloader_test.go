@@ -11,28 +11,54 @@ import (
 	"github.com/rusher2004/screeny-bird/catalog"
 )
 
-// writeTree copies an in-memory catalog onto disk under a new temporary directory.
+// writeTree copies an in-memory catalog onto disk under a new temporary
+// directory, including directories and symlinks.
 func writeTree(t *testing.T, tree fstest.MapFS) string {
 	t.Helper()
 
 	dir := t.TempDir()
 
 	for name, file := range tree {
-		if file.Mode.IsDir() {
-			continue
-		}
-
 		path := filepath.Join(dir, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("creating directory for %s: %v", name, err)
-		}
 
-		if err := os.WriteFile(path, file.Data, 0o644); err != nil {
-			t.Fatalf("writing %s: %v", name, err)
+		switch {
+		case file.Mode&fs.ModeSymlink != 0:
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("creating directory for %s: %v", name, err)
+			}
+
+			if err := os.Symlink(string(file.Data), path); err != nil {
+				t.Fatalf("creating symlink %s: %v", name, err)
+			}
+		case file.Mode.IsDir():
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatalf("creating directory %s: %v", name, err)
+			}
+		default:
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("creating directory for %s: %v", name, err)
+			}
+
+			if err := os.WriteFile(path, file.Data, 0o644); err != nil {
+				t.Fatalf("writing %s: %v", name, err)
+			}
 		}
 	}
 
 	return dir
+}
+
+// loadFS writes an in-memory catalog to disk and loads it through DirLoader,
+// the package's one entry point.
+func loadFS(t *testing.T, tree fstest.MapFS) (*catalog.Catalog, error) {
+	t.Helper()
+
+	loader, err := catalog.NewDirLoader(writeTree(t, tree))
+	if err != nil {
+		t.Fatalf("NewDirLoader() error = %v", err)
+	}
+
+	return loader.Load()
 }
 
 func TestDirLoaderLoadsACatalogFromDisk(t *testing.T) {

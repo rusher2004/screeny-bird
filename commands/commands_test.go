@@ -34,7 +34,7 @@ func run(t *testing.T, catalogs commands.CatalogLoader, args ...string) (output 
 
 	var buf bytes.Buffer
 
-	cmd, err := commands.New(commands.Options{Output: &buf, Catalogs: catalogs})
+	cmd, err := commands.New(commands.Options{Writer: &buf, Catalogs: catalogs})
 	if err != nil {
 		return "", err
 	}
@@ -49,10 +49,10 @@ func TestNewRequiresEveryDependency(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	full := commands.Options{Output: &buf, Catalogs: &fakeCatalogs{}}
+	full := commands.Options{Writer: &buf, Catalogs: &fakeCatalogs{}}
 
 	tests := map[string]func(commands.Options) commands.Options{
-		"output":   func(o commands.Options) commands.Options { o.Output = nil; return o },
+		"writer":   func(o commands.Options) commands.Options { o.Writer = nil; return o },
 		"catalogs": func(o commands.Options) commands.Options { o.Catalogs = nil; return o },
 	}
 
@@ -84,7 +84,7 @@ func TestNewReportsEveryMissingDependency(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrMissingOption", err)
 	}
 
-	for _, name := range []string{"output", "catalogs"} {
+	for _, name := range []string{"writer", "catalogs"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
