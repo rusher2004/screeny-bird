@@ -3,9 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/netip"
 	"time"
 
 	"github.com/rusher2004/screeny-bird/catalog"
@@ -28,10 +26,10 @@ func newServer(cfg config.Config, version string, store catalog.DirLoader, logge
 		Log:               requestLogger{logger: logger},
 		Version:           version,
 		AllowedOrigins:    cfg.CORSAllowedOrigins,
-		ReadHeaderTimeout: seconds(cfg.ReadHeaderTimeoutSeconds),
-		WriteTimeout:      seconds(cfg.WriteTimeoutSeconds),
-		ShutdownTimeout:   seconds(cfg.ShutdownTimeoutSeconds),
-		ReloadInterval:    seconds(cfg.ReloadIntervalSeconds),
+		ReadHeaderTimeout: time.Duration(cfg.ReadHeaderTimeoutSeconds) * time.Second,
+		WriteTimeout:      time.Duration(cfg.WriteTimeoutSeconds) * time.Second,
+		ShutdownTimeout:   time.Duration(cfg.ShutdownTimeoutSeconds) * time.Second,
+		ReloadInterval:    time.Duration(cfg.ReloadIntervalSeconds) * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("wiring the HTTP server: %w", err)
@@ -44,46 +42,18 @@ func newServer(cfg config.Config, version string, store catalog.DirLoader, logge
 // an explicit configuration: no proxy lookup, no redirects and the configured
 // timeout.
 func newProber(cfg config.Config) (server.Prober, error) {
-	url, err := healthURL(cfg.ListenAddress)
-	if err != nil {
-		return server.Prober{}, err
-	}
-
-	timeout := seconds(cfg.HealthcheckTimeoutSeconds)
-
 	client := &http.Client{
-		Timeout:   timeout,
+		Timeout:   time.Duration(cfg.HealthcheckTimeoutSeconds) * time.Second,
 		Transport: &http.Transport{Proxy: nil},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	prober, err := server.NewProber(url, client)
+	prober, err := server.NewProber(cfg.ListenAddress, client)
 	if err != nil {
 		return server.Prober{}, fmt.Errorf("creating prober: %w", err)
 	}
 
 	return prober, nil
-}
-
-// healthURL is where the server answers /healthz as seen from the machine it
-// runs on. The healthcheck runs next to the server, so a server listening on
-// every interface is probed on the loopback address; one bound to a specific
-// address is probed there.
-func healthURL(listenAddress string) (string, error) {
-	host, port, err := net.SplitHostPort(listenAddress)
-	if err != nil {
-		return "", fmt.Errorf("deriving the health URL from listen_address %q: %w", listenAddress, err)
-	}
-
-	if addr, parseErr := netip.ParseAddr(host); host == "" || (parseErr == nil && addr.IsUnspecified()) {
-		host = "127.0.0.1"
-	}
-
-	return "http://" + net.JoinHostPort(host, port) + "/healthz", nil
-}
-
-func seconds(n int) time.Duration {
-	return time.Duration(n) * time.Second
 }

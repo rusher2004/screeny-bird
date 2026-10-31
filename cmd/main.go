@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rusher2004/screeny-bird/catalog"
 	"github.com/rusher2004/screeny-bird/commands"
@@ -103,7 +104,7 @@ func execute(ctx context.Context, version string, loader configLoader, logger *s
 // lookup, no redirects and the configured timeout, so nothing outside the
 // settings decides where a request goes.
 func newSyncer(cfg config.Config) (mirror.Syncer, error) {
-	timeout := seconds(cfg.UpstreamTimeoutSeconds)
+	timeout := time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second
 
 	client := &http.Client{
 		Timeout:   timeout,

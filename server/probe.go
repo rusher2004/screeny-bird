@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 )
 
@@ -19,13 +21,20 @@ type Prober struct {
 	client doer
 }
 
-// NewProber returns a prober for the /healthz endpoint at rawURL. It reports
-// every invalid argument together.
-func NewProber(rawURL string, client doer) (Prober, error) {
+// NewProber returns a prober for the server that listens on listenAddress, a
+// host:port. The probe runs next to the server, so a server listening on every
+// interface is probed on the loopback address and one bound to a specific
+// address is probed there. It reports every invalid argument together.
+func NewProber(listenAddress string, client doer) (Prober, error) {
 	var problems []error
 
-	if parsed, err := url.Parse(rawURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		problems = append(problems, fmt.Errorf("url %q must be an http or https URL with a host", rawURL))
+	host, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		problems = append(problems, fmt.Errorf("listen address %q must look like host:port: %w", listenAddress, err))
+	}
+
+	if addr, parseErr := netip.ParseAddr(host); err == nil && (host == "" || (parseErr == nil && addr.IsUnspecified())) {
+		host = "127.0.0.1"
 	}
 
 	if client == nil {
@@ -36,7 +45,9 @@ func NewProber(rawURL string, client doer) (Prober, error) {
 		return Prober{}, fmt.Errorf("creating prober: %w: %w", ErrInvalidServer, err)
 	}
 
-	return Prober{url: rawURL, client: client}, nil
+	target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: healthPath}
+
+	return Prober{url: target.String(), client: client}, nil
 }
 
 // Probe returns nil when the server answers 200, and an error otherwise.

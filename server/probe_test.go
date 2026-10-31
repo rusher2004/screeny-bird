@@ -45,16 +45,14 @@ func TestNewProberRejectsBadArguments(t *testing.T) {
 	doer := &fakeDoer{}
 
 	for name, tt := range map[string]struct {
-		url    string
-		client *fakeDoer
+		address string
+		client  *fakeDoer
 	}{
-		"empty url":    {"", doer},
-		"no scheme":    {"127.0.0.1:8080/healthz", doer},
-		"ftp scheme":   {"ftp://127.0.0.1/healthz", doer},
-		"no host":      {"http:///healthz", doer},
-		"unparseable":  {"http://[::1", doer},
-		"nil client":   {"http://127.0.0.1:8080/healthz", nil},
-		"both invalid": {"", nil},
+		"empty address":                {"", doer},
+		"no port":                      {"localhost", doer},
+		"too many colons, no brackets": {"::1:8080", doer},
+		"nil client":                   {":8080", nil},
+		"both invalid":                 {"", nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -67,8 +65,43 @@ func TestNewProberRejectsBadArguments(t *testing.T) {
 				client = tt.client
 			}
 
-			if _, err := server.NewProber(tt.url, client); !errors.Is(err, server.ErrInvalidServer) {
-				t.Fatalf("NewProber() error = %v, want ErrInvalidServer", err)
+			if _, err := server.NewProber(tt.address, client); !errors.Is(err, server.ErrInvalidServer) {
+				t.Fatalf("NewProber(%q) error = %v, want ErrInvalidServer", tt.address, err)
+			}
+		})
+	}
+}
+
+func TestProberTargetsTheServerFromInsideTheSameHost(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct{ listen, want string }{
+		"all interfaces, no host": {":8080", "http://127.0.0.1:8080/healthz"},
+		"all interfaces, IPv4":    {"0.0.0.0:9000", "http://127.0.0.1:9000/healthz"},
+		"all interfaces, IPv6":    {"[::]:9000", "http://127.0.0.1:9000/healthz"},
+		"loopback":                {"127.0.0.1:8080", "http://127.0.0.1:8080/healthz"},
+		"a specific address":      {"10.1.2.3:8080", "http://10.1.2.3:8080/healthz"},
+		"a specific IPv6 address": {"[fd00::1]:8080", "http://[fd00::1]:8080/healthz"},
+		"a host name":             {"screeny.internal:8080", "http://screeny.internal:8080/healthz"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			doer := &fakeDoer{status: http.StatusOK}
+
+			prober, err := server.NewProber(tt.listen, doer)
+			if err != nil {
+				t.Fatalf("NewProber(%q) error = %v", tt.listen, err)
+			}
+
+			if err := prober.Probe(context.Background()); err != nil {
+				t.Fatalf("Probe() error = %v", err)
+			}
+
+			if got := doer.requests[0].URL.String(); got != tt.want {
+				t.Fatalf("probed %s, want %s", got, tt.want)
 			}
 		})
 	}
@@ -86,7 +119,7 @@ func TestProbeSucceedsOnlyOnA200(t *testing.T) {
 	} {
 		doer := &fakeDoer{status: status}
 
-		prober, err := server.NewProber("http://127.0.0.1:8080/healthz", doer)
+		prober, err := server.NewProber("127.0.0.1:8080", doer)
 		if err != nil {
 			t.Fatalf("NewProber() error = %v", err)
 		}
@@ -110,7 +143,7 @@ func TestProbeWrapsTransportFailures(t *testing.T) {
 
 	cause := errors.New("connection refused")
 
-	prober, err := server.NewProber("http://127.0.0.1:8080/healthz", &fakeDoer{err: cause})
+	prober, err := server.NewProber("127.0.0.1:8080", &fakeDoer{err: cause})
 	if err != nil {
 		t.Fatalf("NewProber() error = %v", err)
 	}

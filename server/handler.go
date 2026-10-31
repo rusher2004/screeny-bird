@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+// The routes the server answers. The mux patterns and the health prober both
+// use these, so a path is written once.
+const (
+	healthPath  = "/healthz"
+	catalogPath = "/v1/catalog"
+	assetsPath  = "/v1/assets/"
+)
+
 const (
 	immutableCache = "public, max-age=31536000, immutable"
 	revalidate     = "no-cache"
@@ -20,12 +28,12 @@ const (
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("/healthz", methodNotAllowed)
-	mux.HandleFunc("GET /v1/catalog", s.withCORS(s.catalog))
-	mux.HandleFunc("/v1/catalog", methodNotAllowed)
-	mux.HandleFunc("GET /v1/assets/{path...}", s.withCORS(s.asset))
-	mux.HandleFunc("/v1/assets/{path...}", methodNotAllowed)
+	mux.HandleFunc("GET "+healthPath, s.health)
+	mux.HandleFunc(healthPath, methodNotAllowed)
+	mux.HandleFunc("GET "+catalogPath, s.withCORS(s.catalog))
+	mux.HandleFunc(catalogPath, methodNotAllowed)
+	mux.HandleFunc("GET "+assetsPath+"{path...}", s.withCORS(s.asset))
+	mux.HandleFunc(assetsPath+"{path...}", methodNotAllowed)
 	mux.HandleFunc("/", notFound)
 
 	return s.logged(nosniff(mux))
