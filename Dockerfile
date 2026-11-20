@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build
 
 # The target platform and version are required build arguments: the image has
 # no defaults and a build without them fails.
